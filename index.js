@@ -2,12 +2,13 @@ require("dotenv").config();
 const fetch = (...args) => import("node-fetch").then(({default: fetch}) => fetch(...args));
 
 const { 
-Client, 
-GatewayIntentBits, 
-SlashCommandBuilder, 
-REST, 
-Routes, 
-PermissionFlagsBits 
+Client,
+GatewayIntentBits,
+SlashCommandBuilder,
+REST,
+Routes,
+PermissionFlagsBits,
+EmbedBuilder
 } = require("discord.js");
 
 const STAFF_CHANNEL = "1478869019783335957";
@@ -102,7 +103,28 @@ return interaction.editReply("AI error. Check API key.");
 
 const reply = data.choices[0].message.content;
 
-interaction.editReply(reply);
+const embed = new EmbedBuilder()
+.setColor(0xff2a7f)
+.setAuthor({
+name: "Cornèr AI Assistant",
+iconURL: client.user.displayAvatarURL()
+})
+.addFields(
+{
+name: "Question",
+value: question
+},
+{
+name: "Answer",
+value: reply.substring(0, 1024)
+}
+)
+.setFooter({
+text: `Requested by ${interaction.user.username}`
+})
+.setTimestamp();
+
+interaction.editReply({ embeds: [embed] });
 
 } catch (error) {
 
