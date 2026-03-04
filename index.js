@@ -19,7 +19,7 @@ intents: [GatewayIntentBits.Guilds]
 
 const command = new SlashCommandBuilder()
 .setName("ai")
-.setDescription("Ask the staff AI assistant")
+.setDescription("Ask the Cornèr AI staff assistant")
 .addStringOption(option =>
 option.setName("question")
 .setDescription("Your question")
@@ -28,7 +28,7 @@ option.setName("question")
 
 client.once("ready", async () => {
 
-console.log("Corner AI is online.");
+console.log("Cornèr AI is online.");
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
@@ -84,7 +84,7 @@ model: "llama-3.1-8b-instant",
 messages: [
 {
 role: "system",
-content: "You are a technical assistant helping Discord server staff with moderation and server management."
+content: "You are a professional assistant helping Discord server staff with moderation, server management and bot configuration."
 },
 {
 role: "user",
@@ -101,22 +101,27 @@ console.log(data);
 return interaction.editReply("AI error. Check API key.");
 }
 
-const reply = data.choices[0].message.content;
+let reply = data.choices[0].message.content;
+
+if (reply.length > 3500) {
+reply = reply.substring(0, 3500) + "...";
+}
 
 const embed = new EmbedBuilder()
-.setColor(0xff2a7f)
+.setColor("#ff6ec7")
 .setAuthor({
 name: "Cornèr AI Assistant",
 iconURL: client.user.displayAvatarURL()
 })
+.setThumbnail(client.user.displayAvatarURL())
 .addFields(
 {
-name: "Question",
-value: question
+name: "Staff Question",
+value: `> ${question}`
 },
 {
-name: "Answer",
-value: reply.substring(0, 1024)
+name: "AI Response",
+value: reply
 }
 )
 .setFooter({
