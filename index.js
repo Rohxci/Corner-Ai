@@ -2,253 +2,415 @@ require("dotenv").config();
 const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 const {
-Client,
-GatewayIntentBits,
-SlashCommandBuilder,
-REST,
-Routes,
-PermissionFlagsBits,
-EmbedBuilder
+  Client,
+  GatewayIntentBits,
+  SlashCommandBuilder,
+  REST,
+  Routes,
+  PermissionFlagsBits,
+  EmbedBuilder
 } = require("discord.js");
 
-const STAFF_CHANNEL = "1478869019783335957";
+/* ========= CONFIG ========= */
 
+const STAFF_CHANNEL = "1478869019783335957"; // #corner-ai
+
+// Domini considerati sicuri
 const SAFE_DOMAINS = [
-"discord.com",
-"discord.gg",
-"youtube.com",
-"youtu.be",
-"tenor.com",
-"giphy.com",
-"imgur.com"
+  "discord.com",
+  "discord.gg",
+  "youtube.com",
+  "youtu.be",
+  "tenor.com",
+  "giphy.com",
+  "imgur.com",
+  "twitter.com",
+  "x.com",
+  "twitch.tv"
 ];
 
+// parole molto offensive (modificabili)
+const BANNED_WORDS = [
+  "nigger",
+  "faggot",
+  "kys",
+  "retard"
+];
+
+// pattern NSFW semplici
+const NSFW_PATTERNS = [
+  "porn",
+  "nsfw",
+  "nude",
+  "sex",
+  "xxx"
+];
+
+// spam patterns
+const REPEATED_CHAR = /(.)\1{9,}/i;
+const MANY_CAPS = /^[^a-z]*[A-Z]{12,}[^a-z]*$/;
+
+// raid detection
+const NEW_ACCOUNT_HOURS = 48;
+const RAID_WINDOW_MIN = 30;
+const RAID_THRESHOLD = 5;
+
+/* ========= CLIENT ========= */
+
 const client = new Client({
-intents: [
-GatewayIntentBits.Guilds,
-GatewayIntentBits.GuildMessages,
-GatewayIntentBits.MessageContent,
-GatewayIntentBits.GuildMembers
-]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers
+  ]
 });
+
+/* ========= COMMANDS ========= */
 
 const commands = [
 
-new SlashCommandBuilder()
-.setName("ai")
-.setDescription("Ask the Cornèr AI assistant")
-.addStringOption(option =>
-option.setName("question")
-.setDescription("Your question")
-.setRequired(true)
-),
+  new SlashCommandBuilder()
+    .setName("ai")
+    .setDescription("Ask the Cornèr AI assistant")
+    .addStringOption(option =>
+      option.setName("question")
+        .setDescription("Your question")
+        .setRequired(true)
+    ),
 
-new SlashCommandBuilder()
-.setName("aicheck")
-.setDescription("Scan server chats and members for suspicious activity")
+  new SlashCommandBuilder()
+    .setName("aicheck")
+    .setDescription("Run a full server security audit")
 
 ];
 
+/* ========= READY ========= */
+
 client.once("ready", async () => {
 
-console.log("Cornèr AI is online.");
+  console.log("Cornèr AI is online.");
 
-const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+  const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
-await rest.put(
-Routes.applicationCommands(client.user.id),
-{ body: commands.map(c => c.toJSON()) }
-);
+  await rest.put(
+    Routes.applicationCommands(client.user.id),
+    { body: commands.map(c => c.toJSON()) }
+  );
 
-console.log("Commands registered.");
+  console.log("Commands registered.");
 
 });
+
+/* ========= HELPERS ========= */
+
+function extractLinks(text) {
+  const regex = /(https?:\/\/[^\s]+)/gi;
+  return text.match(regex) || [];
+}
+
+function suspiciousLink(url) {
+  try {
+    const { hostname } = new URL(url);
+    return !SAFE_DOMAINS.some(d => hostname.includes(d));
+  } catch {
+    return true;
+  }
+}
+
+/* ========= AUTOWATCH ========= */
+
+client.on("messageCreate", async message => {
+
+  if (!message.guild) return;
+  if (message.author.bot) return;
+  if (message.channel.id === STAFF_CHANNEL) return;
+
+  if (message.member.permissions.has(PermissionFlagsBits.ManageGuild)) return;
+
+  const content = message.content;
+  const lower = content.toLowerCase();
+
+  let reason = null;
+
+  /* spam */
+
+  if (REPEATED_CHAR.test(content)) {
+    reason = "Spam / flood";
+  }
+
+  if (!reason && MANY_CAPS.test(content)) {
+    reason = "Caps spam";
+  }
+
+  /* hate speech */
+
+  if (!reason && BANNED_WORDS.some(w => lower.includes(w))) {
+    reason = "Hate speech";
+  }
+
+  /* NSFW */
+
+  if (!reason && NSFW_PATTERNS.some(p => lower.includes(p))) {
+    reason = "NSFW / sexual content";
+  }
+
+  /* suspicious links */
+
+  const links = extractLinks(content);
+
+  if (!reason && links.length) {
+    for (const link of links) {
+      if (suspiciousLink(link)) {
+        reason = "Suspicious link";
+        break;
+      }
+    }
+  }
+
+  if (!reason) return;
+
+  const staffChannel = await client.channels.fetch(STAFF_CHANNEL);
+
+  const embed = new EmbedBuilder()
+    .setColor("#ff6ec7")
+    .setAuthor({
+      name: "Cornèr AI Rule Alert",
+      iconURL: client.user.displayAvatarURL()
+    })
+    .addFields(
+      { name: "User", value: `<@${message.author.id}>`, inline: true },
+      { name: "Channel", value: `<#${message.channel.id}>`, inline: true },
+      { name: "Issue", value: reason },
+      { name: "Message", value: content.substring(0, 1000) }
+    )
+    .setTimestamp();
+
+  staffChannel.send({ embeds: [embed] });
+
+});
+
+/* ========= MEMBER WATCH ========= */
+
+client.on("guildMemberAdd", async member => {
+
+  const staffChannel = await client.channels.fetch(STAFF_CHANNEL);
+
+  const accountAgeHours =
+    (Date.now() - member.user.createdTimestamp) / 3600000;
+
+  if (accountAgeHours < NEW_ACCOUNT_HOURS) {
+
+    const embed = new EmbedBuilder()
+      .setColor("#ff6ec7")
+      .setAuthor({
+        name: "Cornèr AI Suspicious Account",
+        iconURL: client.user.displayAvatarURL()
+      })
+      .addFields(
+        { name: "User", value: `<@${member.id}>` },
+        { name: "Account Age", value: `${Math.floor(accountAgeHours)} hours` },
+        { name: "Risk", value: "Very new account" }
+      )
+      .setTimestamp();
+
+    staffChannel.send({ embeds: [embed] });
+
+  }
+
+});
+
+/* ========= COMMAND HANDLER ========= */
 
 client.on("interactionCreate", async interaction => {
 
-if (!interaction.isChatInputCommand()) return;
+  if (!interaction.isChatInputCommand()) return;
 
-/* ================= AI ================= */
+  if (interaction.channel.id !== STAFF_CHANNEL) {
+    return interaction.reply({
+      content: "Use this command in the staff AI channel.",
+      ephemeral: true
+    });
+  }
 
-if (interaction.commandName === "ai") {
+  if (!interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+    return interaction.reply({
+      content: "Staff only command.",
+      ephemeral: true
+    });
+  }
 
-if (interaction.channel.id !== STAFF_CHANNEL) {
-return interaction.reply({
-content: "Use this command in the staff AI channel.",
-ephemeral: true
-});
-}
+  /* ===== AI ===== */
 
-if (!interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
-return interaction.reply({
-content: "Staff only command.",
-ephemeral: true
-});
-}
+  if (interaction.commandName === "ai") {
 
-const question = interaction.options.getString("question");
+    const question = interaction.options.getString("question");
 
-await interaction.deferReply();
+    await interaction.deferReply();
 
-try {
+    try {
 
-const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-method: "POST",
-headers: {
-"Content-Type": "application/json",
-"Authorization": `Bearer ${process.env.GROQ_KEY}`
-},
-body: JSON.stringify({
-model: "llama-3.1-8b-instant",
-messages: [
-{ role: "system", content: "You help Discord staff with moderation and server management." },
-{ role: "user", content: question }
-]
-})
-});
+      const response = await fetch(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${process.env.GROQ_KEY}`
+          },
+          body: JSON.stringify({
+            model: "llama-3.1-8b-instant",
+            messages: [
+              { role: "system", content: "You help Discord staff with moderation." },
+              { role: "user", content: question }
+            ]
+          })
+        }
+      );
 
-const data = await response.json();
+      const data = await response.json();
 
-let reply = data.choices[0].message.content;
+      const reply = data.choices[0].message.content;
 
-const embed = new EmbedBuilder()
-.setColor("#ff6ec7")
-.setAuthor({ name: "Cornèr AI Assistant", iconURL: client.user.displayAvatarURL() })
-.addFields(
-{ name: "Question", value: question },
-{ name: "Answer", value: reply.substring(0, 1024) }
-)
-.setFooter({ text: `Requested by ${interaction.user.username}` })
-.setTimestamp();
+      const embed = new EmbedBuilder()
+        .setColor("#ff6ec7")
+        .setAuthor({
+          name: "Cornèr AI Assistant",
+          iconURL: client.user.displayAvatarURL()
+        })
+        .addFields(
+          { name: "Question", value: question },
+          { name: "Answer", value: reply.substring(0, 1024) }
+        )
+        .setTimestamp();
 
-interaction.editReply({ embeds: [embed] });
+      interaction.editReply({ embeds: [embed] });
 
-} catch (err) {
+    } catch (err) {
+      console.error(err);
+      interaction.editReply("AI error.");
+    }
 
-console.error(err);
-interaction.editReply("AI error.");
+  }
 
-}
+  /* ===== AICHECK ===== */
 
-}
+  if (interaction.commandName === "aicheck") {
 
-/* ================= AICHECK ================= */
+    await interaction.deferReply();
 
-if (interaction.commandName === "aicheck") {
+    const suspiciousUsers = new Set();
 
-if (interaction.channel.id !== STAFF_CHANNEL) {
-return interaction.reply({
-content: "Use this command in the staff AI channel.",
-ephemeral: true
-});
-}
+    let spam = 0;
+    let hate = 0;
+    let nsfw = 0;
+    let links = 0;
 
-await interaction.deferReply();
+    for (const channel of interaction.guild.channels.cache.values()) {
 
-const suspiciousUsers = new Set();
-let suspiciousLinks = 0;
+      if (!channel.isTextBased()) continue;
+      if (channel.id === STAFF_CHANNEL) continue;
 
-/* scan all channels automatically */
+      try {
 
-for (const channel of interaction.guild.channels.cache.values()) {
+        const messages = await channel.messages.fetch({ limit: 25 });
 
-if (!channel.isTextBased()) continue;
+        messages.forEach(msg => {
 
-if (channel.id === STAFF_CHANNEL) continue;
+          if (msg.author.bot) return;
 
-try {
+          const text = msg.content.toLowerCase();
 
-const messages = await channel.messages.fetch({ limit: 25 });
+          if (REPEATED_CHAR.test(text) || MANY_CAPS.test(text)) {
+            spam++;
+            suspiciousUsers.add(msg.author);
+          }
 
-messages.forEach(msg => {
+          if (BANNED_WORDS.some(w => text.includes(w))) {
+            hate++;
+            suspiciousUsers.add(msg.author);
+          }
 
-if (msg.author.bot) return;
+          if (NSFW_PATTERNS.some(w => text.includes(w))) {
+            nsfw++;
+            suspiciousUsers.add(msg.author);
+          }
 
-const content = msg.content.toLowerCase();
+          const foundLinks = extractLinks(text);
 
-/* link detection */
+          if (foundLinks.length) {
 
-if (content.includes("http")) {
+            for (const link of foundLinks) {
 
-try {
+              if (suspiciousLink(link)) {
+                links++;
+                suspiciousUsers.add(msg.author);
+              }
 
-const url = new URL(content.split("http")[1].split(" ")[0]);
-const domain = url.hostname;
+            }
 
-if (!SAFE_DOMAINS.some(d => domain.includes(d))) {
+          }
 
-suspiciousLinks++;
-suspiciousUsers.add(msg.author);
+        });
 
-}
+      } catch {}
 
-} catch {}
+    }
 
-}
+    const members = await interaction.guild.members.fetch();
 
-/* spam detection */
+    const newAccounts = [];
 
-if (content.length > 20 && content === content.toUpperCase()) {
-suspiciousUsers.add(msg.author);
-}
+    members.forEach(member => {
 
-});
+      const age =
+        (Date.now() - member.user.createdTimestamp) / 3600000;
 
-} catch {}
+      if (age < NEW_ACCOUNT_HOURS) {
+        newAccounts.push(member);
+      }
 
-}
+    });
 
-/* member check */
+    const recentJoins = members.filter(m => {
 
-const members = await interaction.guild.members.fetch();
+      if (!m.joinedTimestamp) return false;
 
-const newAccounts = [];
+      const minutes = (Date.now() - m.joinedTimestamp) / 60000;
 
-members.forEach(member => {
+      return minutes < RAID_WINDOW_MIN;
 
-const ageHours = (Date.now() - member.user.createdTimestamp) / 3600000;
+    });
 
-if (ageHours < 48) {
-newAccounts.push(member);
-}
+    const raidRisk =
+      recentJoins.size >= RAID_THRESHOLD ? "Medium / Possible raid" : "Low";
 
-});
+    const embed = new EmbedBuilder()
+      .setColor("#ff6ec7")
+      .setAuthor({
+        name: "Cornèr AI Full Security Audit",
+        iconURL: client.user.displayAvatarURL()
+      })
+      .addFields(
+        { name: "Spam / Flood", value: spam.toString(), inline: true },
+        { name: "Hate Speech", value: hate.toString(), inline: true },
+        { name: "NSFW", value: nsfw.toString(), inline: true },
+        { name: "Suspicious Links", value: links.toString(), inline: true },
+        { name: "Raid Risk", value: raidRisk, inline: true },
+        {
+          name: "Users involved",
+          value: [...suspiciousUsers].map(u => `<@${u.id}>`).join("\n") || "None"
+        },
+        {
+          name: "New Accounts",
+          value: newAccounts.slice(0,5).map(m => `<@${m.id}>`).join("\n") || "None"
+        }
+      )
+      .setTimestamp();
 
-/* raid detection */
+    interaction.editReply({ embeds: [embed] });
 
-const recentJoins = members.filter(m => {
-
-if (!m.joinedTimestamp) return false;
-
-const minutes = (Date.now() - m.joinedTimestamp) / 60000;
-
-return minutes < 30;
-
-});
-
-const raidRisk = recentJoins.size > 5 ? "Medium" : "Low";
-
-const embed = new EmbedBuilder()
-.setColor("#ff6ec7")
-.setAuthor({ name: "Cornèr AI Security Check", iconURL: client.user.displayAvatarURL() })
-.addFields(
-{ name: "Suspicious Links", value: suspiciousLinks.toString(), inline: true },
-{ name: "Raid Risk", value: raidRisk, inline: true },
-{
-name: "Users involved",
-value: [...suspiciousUsers].map(u => `<@${u.id}>`).join("\n") || "None"
-},
-{
-name: "New accounts",
-value: newAccounts.slice(0,5).map(m => `<@${m.id}>`).join("\n") || "None"
-}
-)
-.setFooter({ text: `Requested by ${interaction.user.username}` })
-.setTimestamp();
-
-interaction.editReply({ embeds: [embed] });
-
-}
+  }
 
 });
 
