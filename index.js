@@ -1,15 +1,10 @@
 require("dotenv").config();
 const { Client, GatewayIntentBits, SlashCommandBuilder, REST, Routes, PermissionFlagsBits } = require("discord.js");
-const OpenAI = require("openai");
 
 const STAFF_CHANNEL = "1478869019783335957";
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
-});
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_KEY
 });
 
 const command = new SlashCommandBuilder()
@@ -27,19 +22,12 @@ client.once("ready", async () => {
 
   const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
-  try {
+  await rest.put(
+    Routes.applicationCommands(client.user.id),
+    { body: [command.toJSON()] }
+  );
 
-    await rest.put(
-      Routes.applicationCommands(client.user.id),
-      { body: [command.toJSON()] }
-    );
-
-    console.log("Slash command registered.");
-
-  } catch (error) {
-    console.error(error);
-  }
-
+  console.log("Slash command registered.");
 });
 
 client.on("interactionCreate", async interaction => {
@@ -57,7 +45,7 @@ client.on("interactionCreate", async interaction => {
 
     if (!interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
       return interaction.reply({
-        content: "You must be a staff member to use this command.",
+        content: "You must be staff to use this command.",
         ephemeral: true
       });
     }
@@ -68,21 +56,30 @@ client.on("interactionCreate", async interaction => {
 
     try {
 
-      const response = await openai.chat.completions.create({
-        model: "gpt-4.1-mini",
-        messages: [
-          {
-            role: "system",
-            content: "You are a technical assistant helping Discord server staff with moderation, bots, and server management."
-          },
-          {
-            role: "user",
-            content: question
-          }
-        ]
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${process.env.GROQ_KEY}`
+        },
+        body: JSON.stringify({
+          model: "llama3-70b-8192",
+          messages: [
+            {
+              role: "system",
+              content: "You are a technical assistant helping Discord server staff."
+            },
+            {
+              role: "user",
+              content: question
+            }
+          ]
+        })
       });
 
-      const reply = response.choices[0].message.content;
+      const data = await response.json();
+
+      const reply = data.choices[0].message.content;
 
       interaction.editReply(reply);
 
@@ -90,7 +87,7 @@ client.on("interactionCreate", async interaction => {
 
       console.error(error);
 
-      interaction.editReply("AI error. Please try again later.");
+      interaction.editReply("AI error. Try again later.");
 
     }
 
