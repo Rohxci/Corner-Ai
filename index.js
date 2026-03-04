@@ -13,6 +13,39 @@ EmbedBuilder
 
 const STAFF_CHANNEL = "1478869019783335957";
 
+/*
+SERVER MEMORY
+Here you define how your server works
+*/
+
+const SERVER_CONTEXT = `
+Server Name: Cornèr Server
+
+Purpose:
+Community Discord server managed by staff.
+
+Staff Roles:
+- Moderator
+- Admin
+- Owner
+
+Moderation Policy:
+1. Warn
+2. Timeout
+3. Kick
+4. Ban
+
+General Rules:
+- No spam
+- No harassment
+- Respect staff decisions
+- Follow Discord Terms of Service
+
+AI Role:
+You are a professional assistant helping the staff manage the server.
+You provide moderation advice, explain systems and help staff decisions.
+`;
+
 const client = new Client({
 intents: [GatewayIntentBits.Guilds]
 });
@@ -84,7 +117,7 @@ model: "llama-3.1-8b-instant",
 messages: [
 {
 role: "system",
-content: "You are a professional assistant helping Discord server staff with moderation, server management and bot configuration."
+content: SERVER_CONTEXT
 },
 {
 role: "user",
