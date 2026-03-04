@@ -1,7 +1,7 @@
 require("dotenv").config();
-const fetch = (...args) => import("node-fetch").then(({default: fetch}) => fetch(...args));
+const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
-const { 
+const {
 Client,
 GatewayIntentBits,
 SlashCommandBuilder,
@@ -13,51 +13,41 @@ EmbedBuilder
 
 const STAFF_CHANNEL = "1478869019783335957";
 
-/*
-SERVER MEMORY
-Here you define how your server works
-*/
-
-const SERVER_CONTEXT = `
-Server Name: Cornèr Server
-
-Purpose:
-Community Discord server managed by staff.
-
-Staff Roles:
-- Moderator
-- Admin
-- Owner
-
-Moderation Policy:
-1. Warn
-2. Timeout
-3. Kick
-4. Ban
-
-General Rules:
-- No spam
-- No harassment
-- Respect staff decisions
-- Follow Discord Terms of Service
-
-AI Role:
-You are a professional assistant helping the staff manage the server.
-You provide moderation advice, explain systems and help staff decisions.
-`;
+const SAFE_DOMAINS = [
+"discord.com",
+"discord.gg",
+"youtube.com",
+"youtu.be",
+"tenor.com",
+"giphy.com",
+"imgur.com"
+];
 
 const client = new Client({
-intents: [GatewayIntentBits.Guilds]
+intents: [
+GatewayIntentBits.Guilds,
+GatewayIntentBits.GuildMessages,
+GatewayIntentBits.MessageContent,
+GatewayIntentBits.GuildMembers
+]
 });
 
-const command = new SlashCommandBuilder()
+const commands = [
+
+new SlashCommandBuilder()
 .setName("ai")
-.setDescription("Ask the Cornèr AI staff assistant")
+.setDescription("Ask the Cornèr AI assistant")
 .addStringOption(option =>
 option.setName("question")
 .setDescription("Your question")
 .setRequired(true)
-);
+),
+
+new SlashCommandBuilder()
+.setName("aicheck")
+.setDescription("Scan server chats and members for suspicious activity")
+
+];
 
 client.once("ready", async () => {
 
@@ -65,18 +55,12 @@ console.log("Cornèr AI is online.");
 
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
-try {
-
 await rest.put(
 Routes.applicationCommands(client.user.id),
-{ body: [command.toJSON()] }
+{ body: commands.map(c => c.toJSON()) }
 );
 
-console.log("Slash command registered.");
-
-} catch (error) {
-console.error(error);
-}
+console.log("Commands registered.");
 
 });
 
@@ -84,18 +68,20 @@ client.on("interactionCreate", async interaction => {
 
 if (!interaction.isChatInputCommand()) return;
 
+/* ================= AI ================= */
+
 if (interaction.commandName === "ai") {
 
 if (interaction.channel.id !== STAFF_CHANNEL) {
 return interaction.reply({
-content: "This command can only be used in the staff AI channel.",
+content: "Use this command in the staff AI channel.",
 ephemeral: true
 });
 }
 
 if (!interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
 return interaction.reply({
-content: "You must be staff to use this command.",
+content: "Staff only command.",
 ephemeral: true
 });
 }
@@ -115,62 +101,152 @@ headers: {
 body: JSON.stringify({
 model: "llama-3.1-8b-instant",
 messages: [
-{
-role: "system",
-content: SERVER_CONTEXT
-},
-{
-role: "user",
-content: question
-}
+{ role: "system", content: "You help Discord staff with moderation and server management." },
+{ role: "user", content: question }
 ]
 })
 });
 
 const data = await response.json();
 
-if (!data.choices) {
-console.log(data);
-return interaction.editReply("AI error. Check API key.");
-}
-
 let reply = data.choices[0].message.content;
-
-if (reply.length > 3500) {
-reply = reply.substring(0, 3500) + "...";
-}
 
 const embed = new EmbedBuilder()
 .setColor("#ff6ec7")
-.setAuthor({
-name: "Cornèr AI Assistant",
-iconURL: client.user.displayAvatarURL()
-})
-.setThumbnail(client.user.displayAvatarURL())
+.setAuthor({ name: "Cornèr AI Assistant", iconURL: client.user.displayAvatarURL() })
 .addFields(
-{
-name: "Staff Question",
-value: `> ${question}`
-},
-{
-name: "AI Response",
-value: reply
-}
+{ name: "Question", value: question },
+{ name: "Answer", value: reply.substring(0, 1024) }
 )
-.setFooter({
-text: `Requested by ${interaction.user.username}`
-})
+.setFooter({ text: `Requested by ${interaction.user.username}` })
 .setTimestamp();
 
 interaction.editReply({ embeds: [embed] });
 
-} catch (error) {
+} catch (err) {
 
-console.error(error);
-
-interaction.editReply("AI error. Try again later.");
+console.error(err);
+interaction.editReply("AI error.");
 
 }
+
+}
+
+/* ================= AICHECK ================= */
+
+if (interaction.commandName === "aicheck") {
+
+if (interaction.channel.id !== STAFF_CHANNEL) {
+return interaction.reply({
+content: "Use this command in the staff AI channel.",
+ephemeral: true
+});
+}
+
+await interaction.deferReply();
+
+const suspiciousUsers = new Set();
+let suspiciousLinks = 0;
+
+/* scan all channels automatically */
+
+for (const channel of interaction.guild.channels.cache.values()) {
+
+if (!channel.isTextBased()) continue;
+
+if (channel.id === STAFF_CHANNEL) continue;
+
+try {
+
+const messages = await channel.messages.fetch({ limit: 25 });
+
+messages.forEach(msg => {
+
+if (msg.author.bot) return;
+
+const content = msg.content.toLowerCase();
+
+/* link detection */
+
+if (content.includes("http")) {
+
+try {
+
+const url = new URL(content.split("http")[1].split(" ")[0]);
+const domain = url.hostname;
+
+if (!SAFE_DOMAINS.some(d => domain.includes(d))) {
+
+suspiciousLinks++;
+suspiciousUsers.add(msg.author);
+
+}
+
+} catch {}
+
+}
+
+/* spam detection */
+
+if (content.length > 20 && content === content.toUpperCase()) {
+suspiciousUsers.add(msg.author);
+}
+
+});
+
+} catch {}
+
+}
+
+/* member check */
+
+const members = await interaction.guild.members.fetch();
+
+const newAccounts = [];
+
+members.forEach(member => {
+
+const ageHours = (Date.now() - member.user.createdTimestamp) / 3600000;
+
+if (ageHours < 48) {
+newAccounts.push(member);
+}
+
+});
+
+/* raid detection */
+
+const recentJoins = members.filter(m => {
+
+if (!m.joinedTimestamp) return false;
+
+const minutes = (Date.now() - m.joinedTimestamp) / 60000;
+
+return minutes < 30;
+
+});
+
+const raidRisk = recentJoins.size > 5 ? "Medium" : "Low";
+
+const embed = new EmbedBuilder()
+.setColor("#ff6ec7")
+.setAuthor({ name: "Cornèr AI Security Check", iconURL: client.user.displayAvatarURL() })
+.addFields(
+{ name: "Suspicious Links", value: suspiciousLinks.toString(), inline: true },
+{ name: "Raid Risk", value: raidRisk, inline: true },
+{
+name: "Users involved",
+value: [...suspiciousUsers].map(u => `<@${u.id}>`).join("\n") || "None"
+},
+{
+name: "New accounts",
+value: newAccounts.slice(0,5).map(m => `<@${m.id}>`).join("\n") || "None"
+}
+)
+.setFooter({ text: `Requested by ${interaction.user.username}` })
+.setTimestamp();
+
+interaction.editReply({ embeds: [embed] });
 
 }
 
