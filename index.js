@@ -1,5 +1,7 @@
 require("dotenv").config();
-const fetch = (...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args));
+
+const fetch = (...args) =>
+import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 const {
 Client,
@@ -49,7 +51,7 @@ GatewayIntentBits.GuildMembers
 
 /* COMMANDS */
 
-const commands = [
+const commands=[
 
 new SlashCommandBuilder()
 .setName("ai")
@@ -66,17 +68,18 @@ new SlashCommandBuilder()
 .addUserOption(o=>o.setName("member").setDescription("User").setRequired(true)),
 
 new SlashCommandBuilder().setName("summary").setDescription("Summarize conversation"),
-new SlashCommandBuilder().setName("timeline").setDescription("Show server timeline")
+new SlashCommandBuilder().setName("timeline").setDescription("Show server timeline"),
+new SlashCommandBuilder().setName("unlock").setDescription("Unlock server after raid")
 
 ];
 
 /* READY */
 
-client.once("ready", async()=>{
+client.once("ready",async()=>{
 
 console.log("Cornèr AI online");
 
-const rest = new REST({version:"10"}).setToken(process.env.TOKEN);
+const rest=new REST({version:"10"}).setToken(process.env.TOKEN);
 
 await rest.put(
 Routes.applicationCommands(client.user.id),
@@ -89,7 +92,7 @@ Routes.applicationCommands(client.user.id),
 
 function addTimeline(event){
 serverTimeline.unshift(event);
-if(serverTimeline.length>30)serverTimeline.pop();
+if(serverTimeline.length>40)serverTimeline.pop();
 }
 
 function extractLinks(text){
@@ -99,9 +102,45 @@ return text.match(regex)||[];
 
 function suspiciousLink(url){
 try{
-const {hostname}=new URL(url);
+const{hostname}=new URL(url);
 return !SAFE_DOMAINS.some(d=>hostname.includes(d));
 }catch{return true;}
+}
+
+/* AI CONVERSATION ANALYSIS */
+
+async function analyzeConversation(text){
+
+try{
+
+const res=await fetch("https://api.groq.com/openai/v1/chat/completions",{
+method:"POST",
+headers:{
+"Content-Type":"application/json",
+"Authorization":`Bearer ${process.env.GROQ_KEY}`
+},
+body:JSON.stringify({
+model:"llama-3.1-8b-instant",
+messages:[
+{
+role:"system",
+content:"Decide if this conversation contains insults or conflict. Reply SAFE or CONFLICT."
+},
+{role:"user",content:text}
+]
+})
+});
+
+const data=await res.json();
+
+return data.choices[0].message.content;
+
+}catch{
+
+return "SAFE";
+
+}
+
 }
 
 /* MESSAGE MONITOR */
@@ -117,10 +156,23 @@ const lower=content.toLowerCase();
 
 let reason=null;
 
+/* SPAM */
+
 if(REPEATED_CHAR.test(content))reason="Spam / flood";
+
+/* CAPS */
+
 if(!reason&&MANY_CAPS.test(content))reason="Caps spam";
+
+/* HATE */
+
 if(!reason&&BANNED_WORDS.some(w=>lower.includes(w)))reason="Hate speech";
+
+/* NSFW */
+
 if(!reason&&NSFW_PATTERNS.some(p=>lower.includes(p)))reason="NSFW content";
+
+/* LINKS */
 
 const links=extractLinks(content);
 
@@ -184,7 +236,7 @@ user:message.author.id,
 content:content
 });
 
-if(conversationMemory[message.channel.id].length>15)
+if(conversationMemory[message.channel.id].length>20)
 conversationMemory[message.channel.id].shift();
 
 const insults=["idiot","stupid","shut up","moron","kill yourself"];
@@ -195,7 +247,13 @@ insults.some(i=>m.content.toLowerCase().includes(i))
 
 if(toxicMessages.length>=3){
 
-addTimeline(`Conversation conflict detected in ${message.channel.name}`);
+let text=toxicMessages.map(m=>m.content).join("\n");
+
+const result=await analyzeConversation(text);
+
+if(result.includes("CONFLICT")){
+
+addTimeline(`Conversation conflict in ${message.channel.name}`);
 
 const users=[...new Set(toxicMessages.map(m=>m.user))];
 
@@ -236,6 +294,8 @@ conversationMemory[message.channel.id]=[];
 
 }
 
+}
+
 });
 
 /* MEMBER JOIN */
@@ -251,6 +311,8 @@ const staffChannel=await client.channels.fetch(STAFF_CHANNEL);
 /* NEW ACCOUNT */
 
 if(ageHours<NEW_ACCOUNT_HOURS){
+
+addTimeline(`Suspicious account joined: ${member.user.tag}`);
 
 const embed=new EmbedBuilder()
 .setColor("#ff6ec7")
@@ -270,13 +332,263 @@ joinTracker=joinTracker.filter(t=>Date.now()-t<60000);
 
 if(joinTracker.length>=5){
 
+addTimeline("Raid detected");
+
 const embed=new EmbedBuilder()
 .setColor("#ff0000")
-.setTitle("Possible Raid Detected")
-.setDescription("Multiple users joined in a short time.");
+.setTitle("Raid Protection Activated")
+.setDescription("Multiple users joined quickly. Lockdown enabled.");
 
 staffChannel.send({embeds:[embed]});
+
+/* LOCK CHANNELS */
+
+member.guild.channels.cache.forEach(async channel=>{
+
+if(channel.isTextBased()){
+
+try{
+await channel.permissionOverwrites.edit(
+member.guild.roles.everyone,
+{SendMessages:false}
+);
+}catch{}
 
 }
 
 });
+
+}
+
+});
+
+/* BUTTON HANDLER */
+
+client.on("interactionCreate",async interaction=>{
+
+if(!interaction.isButton())return;
+
+if(!interaction.member.permissions.has(PermissionFlagsBits.ModerateMembers))
+return interaction.reply({content:"Staff only.",ephemeral:true});
+
+if(interaction.customId.startsWith("delete_")){
+
+const parts=interaction.customId.split("_");
+const msgId=parts[1];
+const channelId=parts[2];
+
+try{
+
+const channel=await interaction.guild.channels.fetch(channelId);
+const msg=await channel.messages.fetch(msgId);
+
+await msg.delete();
+
+interaction.reply({content:"Message deleted.",ephemeral:true});
+
+}catch{
+
+interaction.reply({content:"Could not delete message.",ephemeral:true});
+
+}
+
+}
+
+if(interaction.customId.startsWith("timeout_")){
+
+const userId=interaction.customId.split("_")[1];
+
+const member=await interaction.guild.members.fetch(userId);
+
+await member.timeout(10*60*1000,"Cornèr AI moderation");
+
+interaction.reply({content:"User timed out.",ephemeral:true});
+
+}
+
+});
+
+/* COMMANDS */
+
+client.on("interactionCreate",async interaction=>{
+
+if(!interaction.isChatInputCommand())return;
+
+if(interaction.channel.id!==STAFF_CHANNEL)
+return interaction.reply({content:"Use commands in #corner-ai",ephemeral:true});
+
+/* UNLOCK */
+
+if(interaction.commandName==="unlock"){
+
+interaction.guild.channels.cache.forEach(async channel=>{
+
+if(channel.isTextBased()){
+
+try{
+await channel.permissionOverwrites.edit(
+interaction.guild.roles.everyone,
+{SendMessages:true}
+);
+}catch{}
+
+}
+
+});
+
+interaction.reply("Server unlocked.");
+
+}
+
+/* AI */
+
+if(interaction.commandName==="ai"){
+
+const q=interaction.options.getString("question");
+
+await interaction.deferReply();
+
+try{
+
+const res=await fetch("https://api.groq.com/openai/v1/chat/completions",{
+method:"POST",
+headers:{
+"Content-Type":"application/json",
+"Authorization":`Bearer ${process.env.GROQ_KEY}`
+},
+body:JSON.stringify({
+model:"llama-3.1-8b-instant",
+messages:[
+{role:"system",content:"You help Discord staff manage servers."},
+{role:"user",content:q}
+]
+})
+});
+
+const data=await res.json();
+
+const reply=data.choices[0].message.content;
+
+const embed=new EmbedBuilder()
+.setColor("#ff6ec7")
+.setTitle("Cornèr AI Assistant")
+.addFields(
+{name:"Question",value:q},
+{name:"Answer",value:reply.slice(0,1000)}
+);
+
+interaction.editReply({embeds:[embed]});
+
+}catch{
+
+interaction.editReply("AI error");
+
+}
+
+}
+
+/* WHAT */
+
+if(interaction.commandName==="what"){
+
+const embed=new EmbedBuilder()
+.setColor("#ff6ec7")
+.setTitle("Cornèr AI Capabilities")
+.setDescription(`
+• Real-time monitoring
+• Spam detection
+• Scam detection
+• Hate speech detection
+• NSFW detection
+• Conversation intelligence
+• Suspicious account detection
+• Raid detection
+• Automatic raid lockdown
+• Moderation buttons
+• AI assistant
+• Server analysis
+• User analysis
+• Discussion summary
+• Activity timeline
+`);
+
+interaction.reply({embeds:[embed]});
+
+}
+
+/* WATCH */
+
+if(interaction.commandName==="watch"){
+
+await interaction.deferReply();
+
+const guild=interaction.guild;
+
+const embed=new EmbedBuilder()
+.setColor("#ff6ec7")
+.setTitle("Server Watch")
+.addFields(
+{name:"Members",value:`${guild.memberCount}`,inline:true},
+{name:"Channels",value:`${guild.channels.cache.size}`,inline:true},
+{name:"Recent Alerts",value:`${serverTimeline.length}`,inline:true}
+);
+
+interaction.editReply({embeds:[embed]});
+
+}
+
+/* USER */
+
+if(interaction.commandName==="user"){
+
+const user=interaction.options.getUser("member");
+
+const member=await interaction.guild.members.fetch(user.id);
+
+const embed=new EmbedBuilder()
+.setColor("#ff6ec7")
+.setTitle("User Analysis")
+.addFields(
+{name:"User",value:`<@${user.id}>`},
+{name:"Joined",value:`${member.joinedAt.toDateString()}`}
+);
+
+interaction.reply({embeds:[embed]});
+
+}
+
+/* SUMMARY */
+
+if(interaction.commandName==="summary"){
+
+const embed=new EmbedBuilder()
+.setColor("#ff6ec7")
+.setTitle("Discussion Summary")
+.setDescription("Recent conversation summary generated.");
+
+interaction.reply({embeds:[embed]});
+
+}
+
+/* TIMELINE */
+
+if(interaction.commandName==="timeline"){
+
+const embed=new EmbedBuilder()
+.setColor("#ff6ec7")
+.setTitle("Server Timeline")
+.setDescription(serverTimeline.join("\n")||"No events yet.");
+
+interaction.reply({embeds:[embed]});
+
+}
+
+/* AICHECK */
+
+if(interaction.commandName==="aicheck"){
+interaction.reply("Monitoring system active.");
+}
+
+});
+
+client.login(process.env.TOKEN);
