@@ -259,49 +259,6 @@ staffChannel.send({embeds:[embed]});
 
 });
 
-/* BUTTON HANDLER */
-
-client.on("interactionCreate",async interaction=>{
-
-if(!interaction.isButton())return;
-
-if(!interaction.member.permissions.has(PermissionFlagsBits.ModerateMembers))
-return interaction.reply({content:"Staff only.",ephemeral:true});
-
-if(interaction.customId.startsWith("delete_")){
-
-const parts=interaction.customId.split("_");
-const msgId=parts[1];
-const channelId=parts[2];
-
-try{
-
-const channel=await interaction.guild.channels.fetch(channelId);
-const msg=await channel.messages.fetch(msgId);
-
-await msg.delete();
-
-interaction.reply({content:"Message deleted.",ephemeral:true});
-
-}catch{
-interaction.reply({content:"Could not delete message.",ephemeral:true});
-}
-
-}
-
-if(interaction.customId.startsWith("timeout_")){
-
-const userId=interaction.customId.split("_")[1];
-const member=await interaction.guild.members.fetch(userId);
-
-await member.timeout(10*60*1000,"Cornèr AI moderation");
-
-interaction.reply({content:"User timed out.",ephemeral:true});
-
-}
-
-});
-
 /* COMMANDS */
 
 client.on("interactionCreate",async interaction=>{
@@ -330,7 +287,10 @@ headers:{
 body:JSON.stringify({
 model:"llama-3.1-8b-instant",
 messages:[
-{role:"system",content:"You help Discord staff manage servers."},
+{
+role:"system",
+content:"You are Cornèr AI, a playful but intelligent catgirl guardian of the Discord server 'The Fluffy Kingdom'. You help staff manage the community, detect problems and give advice. You speak professionally but sometimes show catgirl personality such as curiosity, playful tone, and small references to paws, ears or tail. You are loyal to the server and protective of the community."
+},
 {role:"user",content:q}
 ]
 })
@@ -353,105 +313,6 @@ interaction.editReply({embeds:[embed]});
 interaction.editReply("AI error");
 }
 
-}
-
-/* WHAT */
-
-if(interaction.commandName==="what"){
-
-const embed=new EmbedBuilder()
-.setColor("#ff6ec7")
-.setTitle("Cornèr AI Capabilities")
-.setDescription(`
-• Real-time monitoring
-• Spam detection
-• Scam detection
-• Hate speech detection
-• NSFW detection
-• Conversation intelligence
-• Suspicious account detection
-• Raid detection
-• Moderation buttons
-• AI assistant
-• Server analysis
-• User analysis
-• Discussion summary
-• Activity timeline
-`);
-
-interaction.reply({embeds:[embed]});
-
-}
-
-/* WATCH */
-
-if(interaction.commandName==="watch"){
-
-await interaction.deferReply();
-
-const guild=interaction.guild;
-
-const embed=new EmbedBuilder()
-.setColor("#ff6ec7")
-.setTitle("Server Watch")
-.addFields(
-{name:"Members",value:`${guild.memberCount}`,inline:true},
-{name:"Channels",value:`${guild.channels.cache.size}`,inline:true}
-);
-
-interaction.editReply({embeds:[embed]});
-
-}
-
-/* USER */
-
-if(interaction.commandName==="user"){
-
-const user=interaction.options.getUser("member");
-const member=await interaction.guild.members.fetch(user.id);
-
-const embed=new EmbedBuilder()
-.setColor("#ff6ec7")
-.setTitle("User Analysis")
-.addFields(
-{name:"User",value:`<@${user.id}>`},
-{name:"Joined",value:`${member.joinedAt.toDateString()}`}
-);
-
-interaction.reply({embeds:[embed]});
-
-}
-
-/* SUMMARY */
-
-if(interaction.commandName==="summary"){
-
-const embed=new EmbedBuilder()
-.setColor("#ff6ec7")
-.setTitle("Discussion Summary")
-.setDescription("Recent conversation summary generated.");
-
-interaction.reply({embeds:[embed]});
-
-}
-
-/* TIMELINE */
-
-if(interaction.commandName==="timeline"){
-
-const embed=new EmbedBuilder()
-.setColor("#ff6ec7")
-.setTitle("Server Timeline")
-.setDescription(serverTimeline.join("\n")||"No events yet.");
-
-interaction.reply({embeds:[embed]});
-
-}
-
-/* AICHECK */
-
-if(interaction.commandName==="aicheck"){
-interaction.reply("Monitoring system active.");
 }
 
 });
