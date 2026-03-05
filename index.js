@@ -19,24 +19,31 @@ ButtonStyle
 /* CONFIG */
 
 const STAFF_CHANNEL = "1478869019783335957";
+const NEW_ACCOUNT_HOURS = 48;
+
+const RAID_JOIN_THRESHOLD = 5;
+const RAID_WINDOW_MS = 60000;
 
 const SAFE_DOMAINS = [
-"discord.com","discord.gg","youtube.com","youtu.be","tenor.com","giphy.com","imgur.com"
+"discord.com",
+"discord.gg",
+"youtube.com",
+"youtu.be",
+"tenor.com",
+"giphy.com",
+"imgur.com"
 ];
-
-const BANNED_WORDS = ["nigger","faggot","kys"];
-const NSFW_PATTERNS = ["porn","nsfw","sex","xxx","nude"];
-
-const REPEATED_CHAR = /(.)\1{9,}/i;
-const MANY_CAPS = /^[^a-z]*[A-Z]{12,}[^a-z]*$/;
-
-const NEW_ACCOUNT_HOURS = 48;
 
 /* MEMORY */
 
 let serverTimeline = [];
 let conversationMemory = {};
 let joinTracker = [];
+
+let userRisk = {};
+let userTrust = {};
+
+let violationCount = 0;
 
 /* CLIENT */
 
@@ -49,27 +56,119 @@ GatewayIntentBits.GuildMembers
 ]
 });
 
+/* VIOLATION PATTERNS */
+
+const VIOLATIONS = {
+
+spam:[
+/(.)\1{8,}/i,
+/(.)\1{10,}/i,
+/(.)\1{12,}/i,
+/spam/i,
+/buy now/i,
+/limited offer/i,
+/cheap price/i,
+/earn money fast/i
+],
+
+caps:[
+/^[^a-z]*[A-Z]{12,}[^a-z]*$/,
+/^[^a-z]*[A-Z]{15,}[^a-z]*$/,
+/^[^a-z]*[A-Z]{20,}[^a-z]*$/
+],
+
+scam:[
+/free nitro/i,
+/nitro giveaway/i,
+/claim nitro/i,
+/steam gift/i,
+/gift card/i,
+/crypto reward/i,
+/airdrop/i
+],
+
+phishing:[
+/verify account/i,
+/confirm password/i,
+/security check/i,
+/account locked/i,
+/login required/i
+],
+
+advertising:[
+/subscribe now/i,
+/check my channel/i,
+/promo code/i,
+/visit my website/i
+],
+
+nsfw:[
+/porn/i,
+/xxx/i,
+/nsfw/i,
+/explicit/i
+],
+
+harassment:[
+/idiot/i,
+/moron/i,
+/stupid/i,
+/shut up/i,
+/loser/i
+],
+
+emoji_spam:[
+/(\p{Emoji}){10,}/u,
+/(\p{Emoji}){15,}/u
+],
+
+mass_ping:[
+/@everyone/i,
+/@here/i
+],
+
+fake_giveaway:[
+/free giveaway/i,
+/instant reward/i,
+/lucky winner/i
+]
+
+};
+
 /* COMMANDS */
 
 const commands=[
 
 new SlashCommandBuilder()
 .setName("ai")
-.setDescription("Ask the Cornèr AI assistant")
-.addStringOption(o=>o.setName("question").setDescription("Your question").setRequired(true)),
+.setDescription("Ask Cornèr AI")
+.addStringOption(o=>o.setName("question").setRequired(true)),
 
-new SlashCommandBuilder().setName("aicheck").setDescription("Check monitoring status"),
-new SlashCommandBuilder().setName("what").setDescription("Show Cornèr AI capabilities"),
-new SlashCommandBuilder().setName("watch").setDescription("Run full server analysis"),
+new SlashCommandBuilder().setName("what").setDescription("Show capabilities"),
+new SlashCommandBuilder().setName("watch").setDescription("Server overview"),
+new SlashCommandBuilder().setName("timeline").setDescription("Server timeline"),
 
 new SlashCommandBuilder()
 .setName("user")
-.setDescription("Analyze a server member")
-.addUserOption(o=>o.setName("member").setDescription("User").setRequired(true)),
+.setDescription("Analyze user")
+.addUserOption(o=>o.setName("member").setRequired(true)),
 
-new SlashCommandBuilder().setName("summary").setDescription("Summarize conversation"),
-new SlashCommandBuilder().setName("timeline").setDescription("Show server timeline"),
-new SlashCommandBuilder().setName("unlock").setDescription("Unlock server after raid")
+new SlashCommandBuilder()
+.setName("risk")
+.setDescription("Check user risk")
+.addUserOption(o=>o.setName("member").setRequired(true)),
+
+new SlashCommandBuilder()
+.setName("trust")
+.setDescription("Check user trust")
+.addUserOption(o=>o.setName("member").setRequired(true)),
+
+new SlashCommandBuilder().setName("stats").setDescription("Moderation statistics"),
+new SlashCommandBuilder().setName("scan").setDescription("Scan channel"),
+new SlashCommandBuilder().setName("lock").setDescription("Lock server"),
+new SlashCommandBuilder().setName("unlock").setDescription("Unlock server"),
+new SlashCommandBuilder().setName("slowmode").setDescription("Enable slowmode"),
+new SlashCommandBuilder().setName("aicheck").setDescription("Check AI system")
 
 ];
 
@@ -77,7 +176,7 @@ new SlashCommandBuilder().setName("unlock").setDescription("Unlock server after 
 
 client.once("ready",async()=>{
 
-console.log("Cornèr AI online");
+console.log("Cornèr AI v5 online");
 
 const rest=new REST({version:"10"}).setToken(process.env.TOKEN);
 
@@ -92,7 +191,7 @@ Routes.applicationCommands(client.user.id),
 
 function addTimeline(event){
 serverTimeline.unshift(event);
-if(serverTimeline.length>40)serverTimeline.pop();
+if(serverTimeline.length>80)serverTimeline.pop();
 }
 
 function extractLinks(text){
@@ -102,33 +201,56 @@ return text.match(regex)||[];
 
 function suspiciousLink(url){
 try{
-const{hostname}=new URL(url);
+const {hostname}=new URL(url);
 return !SAFE_DOMAINS.some(d=>hostname.includes(d));
 }catch{return true;}
 }
 
-/* AI CONVERSATION ANALYSIS */
+function detectViolation(text){
 
-async function analyzeConversation(text){
+for(const type in VIOLATIONS){
+
+for(const pattern of VIOLATIONS[type]){
+
+if(pattern.test(text)) return type;
+
+}
+
+}
+
+return null;
+
+}
+
+/* AI ANALYSIS */
+
+async function analyzeMessage(content){
 
 try{
 
 const res=await fetch("https://api.groq.com/openai/v1/chat/completions",{
+
 method:"POST",
+
 headers:{
 "Content-Type":"application/json",
 "Authorization":`Bearer ${process.env.GROQ_KEY}`
 },
+
 body:JSON.stringify({
+
 model:"llama-3.1-8b-instant",
+
 messages:[
 {
 role:"system",
-content:"Decide if this conversation contains insults or conflict. Reply SAFE or CONFLICT."
+content:"Classify message: SAFE, SPAM, SCAM, HARASSMENT, NSFW, RAID."
 },
-{role:"user",content:text}
+{role:"user",content}
 ]
+
 })
+
 });
 
 const data=await res.json();
@@ -147,59 +269,58 @@ return "SAFE";
 
 client.on("messageCreate",async message=>{
 
-if(!message.guild)return;
-if(message.author.bot)return;
-if(message.channel.id===STAFF_CHANNEL)return;
+if(!message.guild) return;
+if(message.author.bot) return;
+if(message.channel.id===STAFF_CHANNEL) return;
 
-const content=message.content;
-const lower=content.toLowerCase();
+const content = message.content;
 
-let reason=null;
+let reason = detectViolation(content);
 
-/* SPAM */
+/* LINK DETECTION */
 
-if(REPEATED_CHAR.test(content))reason="Spam / flood";
+const links = extractLinks(content);
 
-/* CAPS */
+if(!reason && links.length){
 
-if(!reason&&MANY_CAPS.test(content))reason="Caps spam";
-
-/* HATE */
-
-if(!reason&&BANNED_WORDS.some(w=>lower.includes(w)))reason="Hate speech";
-
-/* NSFW */
-
-if(!reason&&NSFW_PATTERNS.some(p=>lower.includes(p)))reason="NSFW content";
-
-/* LINKS */
-
-const links=extractLinks(content);
-
-if(!reason&&links.length){
 for(const link of links){
+
 if(suspiciousLink(link)){
-reason="Suspicious link";
+reason="suspicious_link";
 break;
 }
-}
+
 }
 
-/* ALERT */
+}
 
 if(reason){
 
-addTimeline(`Alert: ${reason} by ${message.author.tag}`);
+const aiResult = await analyzeMessage(content);
 
-const staffChannel=await client.channels.fetch(STAFF_CHANNEL);
+if(aiResult==="SAFE") return;
 
-const embed=new EmbedBuilder()
+violationCount++;
+
+userRisk[message.author.id]=(userRisk[message.author.id]||0)+1;
+userTrust[message.author.id]=(userTrust[message.author.id]||100)-5;
+
+addTimeline(`${aiResult} detected from ${message.author.tag}`);
+
+const staffChannel = await client.channels.fetch(STAFF_CHANNEL);
+
+const embed = new EmbedBuilder()
+
 .setColor("#ff6ec7")
+
 .setTitle("Cornèr AI Alert")
+
 .addFields(
 {name:"User",value:`<@${message.author.id}>`,inline:true},
 {name:"Channel",value:`<#${message.channel.id}>`,inline:true},
-{name:"Issue",value:reason},
+{name:"Type",value:aiResult},
+{name:"Risk Score",value:`${userRisk[message.author.id]}`},
+{name:"Trust Score",value:`${userTrust[message.author.id]}`},
 {name:"Message",value:`${content.slice(0,200)}\n\n[Jump to message](${message.url})`}
 );
 
@@ -207,7 +328,7 @@ const row=new ActionRowBuilder().addComponents(
 
 new ButtonBuilder()
 .setCustomId(`delete_${message.id}_${message.channel.id}`)
-.setLabel("Delete Message")
+.setLabel("Delete")
 .setStyle(ButtonStyle.Danger),
 
 new ButtonBuilder()
@@ -216,7 +337,7 @@ new ButtonBuilder()
 .setStyle(ButtonStyle.Secondary),
 
 new ButtonBuilder()
-.setLabel("Jump to Message")
+.setLabel("Jump")
 .setStyle(ButtonStyle.Link)
 .setURL(message.url)
 
@@ -226,122 +347,41 @@ staffChannel.send({embeds:[embed],components:[row]});
 
 }
 
-/* CONVERSATION INTELLIGENCE */
+/* CONVERSATION MEMORY */
 
 if(!conversationMemory[message.channel.id])
 conversationMemory[message.channel.id]=[];
 
-conversationMemory[message.channel.id].push({
-user:message.author.id,
-content:content
-});
+conversationMemory[message.channel.id].push(content);
 
 if(conversationMemory[message.channel.id].length>20)
 conversationMemory[message.channel.id].shift();
 
-const insults=["idiot","stupid","shut up","moron","kill yourself"];
-
-const toxicMessages=conversationMemory[message.channel.id].filter(m =>
-insults.some(i=>m.content.toLowerCase().includes(i))
-);
-
-if(toxicMessages.length>=3){
-
-let text=toxicMessages.map(m=>m.content).join("\n");
-
-const result=await analyzeConversation(text);
-
-if(result.includes("CONFLICT")){
-
-addTimeline(`Conversation conflict in ${message.channel.name}`);
-
-const users=[...new Set(toxicMessages.map(m=>m.user))];
-
-const staffChannel=await client.channels.fetch(STAFF_CHANNEL);
-
-const embed=new EmbedBuilder()
-.setColor("#ff6ec7")
-.setTitle("Conversation Risk Detected")
-.addFields(
-{name:"Channel",value:`<#${message.channel.id}>`},
-{name:"Users involved",value:users.map(u=>`<@${u}>`).join("\n")},
-{name:"Risk",value:"Possible toxic conversation"},
-{name:"Jump",value:`[Jump to message](${message.url})`}
-);
-
-const row=new ActionRowBuilder().addComponents(
-
-new ButtonBuilder()
-.setCustomId(`delete_${message.id}_${message.channel.id}`)
-.setLabel("Delete Message")
-.setStyle(ButtonStyle.Danger),
-
-new ButtonBuilder()
-.setCustomId(`timeout_${message.author.id}`)
-.setLabel("Timeout 10m")
-.setStyle(ButtonStyle.Secondary),
-
-new ButtonBuilder()
-.setLabel("Jump to Message")
-.setStyle(ButtonStyle.Link)
-.setURL(message.url)
-
-);
-
-staffChannel.send({embeds:[embed],components:[row]});
-
-conversationMemory[message.channel.id]=[];
-
-}
-
-}
-
 });
 
-/* MEMBER JOIN */
+/* RAID DETECTION */
 
 client.on("guildMemberAdd",async member=>{
 
 joinTracker.push(Date.now());
 
-const ageHours=(Date.now()-member.user.createdTimestamp)/3600000;
+joinTracker = joinTracker.filter(t=>Date.now()-t<RAID_WINDOW_MS);
 
-const staffChannel=await client.channels.fetch(STAFF_CHANNEL);
-
-/* NEW ACCOUNT */
-
-if(ageHours<NEW_ACCOUNT_HOURS){
-
-addTimeline(`Suspicious account joined: ${member.user.tag}`);
-
-const embed=new EmbedBuilder()
-.setColor("#ff6ec7")
-.setTitle("Suspicious Account")
-.addFields(
-{name:"User",value:`<@${member.id}>`},
-{name:"Account Age",value:`${Math.floor(ageHours)} hours`}
-);
-
-staffChannel.send({embeds:[embed]});
-
-}
-
-/* RAID DETECTION */
-
-joinTracker=joinTracker.filter(t=>Date.now()-t<60000);
-
-if(joinTracker.length>=5){
+if(joinTracker.length>=RAID_JOIN_THRESHOLD){
 
 addTimeline("Raid detected");
 
+const staffChannel=await client.channels.fetch(STAFF_CHANNEL);
+
 const embed=new EmbedBuilder()
+
 .setColor("#ff0000")
-.setTitle("Raid Protection Activated")
-.setDescription("Multiple users joined quickly. Lockdown enabled.");
+
+.setTitle("Raid Protection")
+
+.setDescription("Mass joins detected. Lockdown enabled.");
 
 staffChannel.send({embeds:[embed]});
-
-/* LOCK CHANNELS */
 
 member.guild.channels.cache.forEach(async channel=>{
 
@@ -366,7 +406,7 @@ member.guild.roles.everyone,
 
 client.on("interactionCreate",async interaction=>{
 
-if(!interaction.isButton())return;
+if(!interaction.isButton()) return;
 
 if(!interaction.member.permissions.has(PermissionFlagsBits.ModerateMembers))
 return interaction.reply({content:"Staff only.",ephemeral:true});
@@ -388,7 +428,7 @@ interaction.reply({content:"Message deleted.",ephemeral:true});
 
 }catch{
 
-interaction.reply({content:"Could not delete message.",ephemeral:true});
+interaction.reply({content:"Delete failed.",ephemeral:true});
 
 }
 
@@ -397,7 +437,6 @@ interaction.reply({content:"Could not delete message.",ephemeral:true});
 if(interaction.customId.startsWith("timeout_")){
 
 const userId=interaction.customId.split("_")[1];
-
 const member=await interaction.guild.members.fetch(userId);
 
 await member.timeout(10*60*1000,"Cornèr AI moderation");
@@ -412,10 +451,95 @@ interaction.reply({content:"User timed out.",ephemeral:true});
 
 client.on("interactionCreate",async interaction=>{
 
-if(!interaction.isChatInputCommand())return;
+if(!interaction.isChatInputCommand()) return;
 
 if(interaction.channel.id!==STAFF_CHANNEL)
-return interaction.reply({content:"Use commands in #corner-ai",ephemeral:true});
+return interaction.reply({content:"Use commands in staff channel.",ephemeral:true});
+
+/* RISK */
+
+if(interaction.commandName==="risk"){
+
+const user=interaction.options.getUser("member");
+
+const risk=userRisk[user.id]||0;
+
+interaction.reply(`${user.username} risk score: ${risk}`);
+
+}
+
+/* TRUST */
+
+if(interaction.commandName==="trust"){
+
+const user=interaction.options.getUser("member");
+
+const trust=userTrust[user.id]||100;
+
+interaction.reply(`${user.username} trust score: ${trust}`);
+
+}
+
+/* STATS */
+
+if(interaction.commandName==="stats"){
+
+interaction.reply(`Violations detected: ${violationCount}`);
+
+}
+
+/* TIMELINE */
+
+if(interaction.commandName==="timeline"){
+
+const embed=new EmbedBuilder()
+.setColor("#ff6ec7")
+.setTitle("Server Timeline")
+.setDescription(serverTimeline.join("\n")||"No events.");
+
+interaction.reply({embeds:[embed]});
+
+}
+
+/* WATCH */
+
+if(interaction.commandName==="watch"){
+
+const embed=new EmbedBuilder()
+.setColor("#ff6ec7")
+.setTitle("Server Watch")
+.addFields(
+{name:"Members",value:`${interaction.guild.memberCount}`,inline:true},
+{name:"Channels",value:`${interaction.guild.channels.cache.size}`,inline:true},
+{name:"Alerts",value:`${serverTimeline.length}`,inline:true}
+);
+
+interaction.reply({embeds:[embed]});
+
+}
+
+/* LOCK */
+
+if(interaction.commandName==="lock"){
+
+interaction.guild.channels.cache.forEach(async channel=>{
+
+if(channel.isTextBased()){
+
+try{
+await channel.permissionOverwrites.edit(
+interaction.guild.roles.everyone,
+{SendMessages:false}
+);
+}catch{}
+
+}
+
+});
+
+interaction.reply("Server locked.");
+
+}
 
 /* UNLOCK */
 
@@ -440,153 +564,20 @@ interaction.reply("Server unlocked.");
 
 }
 
-/* AI */
+/* SLOWMODE */
 
-if(interaction.commandName==="ai"){
+if(interaction.commandName==="slowmode"){
 
-const q=interaction.options.getString("question");
+interaction.channel.setRateLimitPerUser(10);
 
-await interaction.deferReply();
-
-try{
-
-const res=await fetch("https://api.groq.com/openai/v1/chat/completions",{
-method:"POST",
-headers:{
-"Content-Type":"application/json",
-"Authorization":`Bearer ${process.env.GROQ_KEY}`
-},
-body:JSON.stringify({
-model:"llama-3.1-8b-instant",
-messages:[
-{role:"system",content:"You help Discord staff manage servers."},
-{role:"user",content:q}
-]
-})
-});
-
-const data=await res.json();
-
-const reply=data.choices[0].message.content;
-
-const embed=new EmbedBuilder()
-.setColor("#ff6ec7")
-.setTitle("Cornèr AI Assistant")
-.addFields(
-{name:"Question",value:q},
-{name:"Answer",value:reply.slice(0,1000)}
-);
-
-interaction.editReply({embeds:[embed]});
-
-}catch{
-
-interaction.editReply("AI error");
-
-}
-
-}
-
-/* WHAT */
-
-if(interaction.commandName==="what"){
-
-const embed=new EmbedBuilder()
-.setColor("#ff6ec7")
-.setTitle("Cornèr AI Capabilities")
-.setDescription(`
-• Real-time monitoring
-• Spam detection
-• Scam detection
-• Hate speech detection
-• NSFW detection
-• Conversation intelligence
-• Suspicious account detection
-• Raid detection
-• Automatic raid lockdown
-• Moderation buttons
-• AI assistant
-• Server analysis
-• User analysis
-• Discussion summary
-• Activity timeline
-`);
-
-interaction.reply({embeds:[embed]});
-
-}
-
-/* WATCH */
-
-if(interaction.commandName==="watch"){
-
-await interaction.deferReply();
-
-const guild=interaction.guild;
-
-const embed=new EmbedBuilder()
-.setColor("#ff6ec7")
-.setTitle("Server Watch")
-.addFields(
-{name:"Members",value:`${guild.memberCount}`,inline:true},
-{name:"Channels",value:`${guild.channels.cache.size}`,inline:true},
-{name:"Recent Alerts",value:`${serverTimeline.length}`,inline:true}
-);
-
-interaction.editReply({embeds:[embed]});
-
-}
-
-/* USER */
-
-if(interaction.commandName==="user"){
-
-const user=interaction.options.getUser("member");
-
-const member=await interaction.guild.members.fetch(user.id);
-
-const embed=new EmbedBuilder()
-.setColor("#ff6ec7")
-.setTitle("User Analysis")
-.addFields(
-{name:"User",value:`<@${user.id}>`},
-{name:"Joined",value:`${member.joinedAt.toDateString()}`}
-);
-
-interaction.reply({embeds:[embed]});
-
-}
-
-/* SUMMARY */
-
-if(interaction.commandName==="summary"){
-
-const embed=new EmbedBuilder()
-.setColor("#ff6ec7")
-.setTitle("Discussion Summary")
-.setDescription("Recent conversation summary generated.");
-
-interaction.reply({embeds:[embed]});
-
-}
-
-/* TIMELINE */
-
-if(interaction.commandName==="timeline"){
-
-const embed=new EmbedBuilder()
-.setColor("#ff6ec7")
-.setTitle("Server Timeline")
-.setDescription(serverTimeline.join("\n")||"No events yet.");
-
-interaction.reply({embeds:[embed]});
+interaction.reply("Slowmode enabled (10s).");
 
 }
 
 /* AICHECK */
 
 if(interaction.commandName==="aicheck"){
-interaction.reply("Monitoring system active.");
+interaction.reply("Cornèr AI monitoring active.");
 }
 
 });
