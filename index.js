@@ -148,7 +148,7 @@ const embed=new EmbedBuilder()
 {name:"User",value:`<@${message.author.id}>`,inline:true},
 {name:"Channel",value:`<#${message.channel.id}>`,inline:true},
 {name:"Issue",value:reason},
-{name:"Message",value:`${content.slice(0,200)}\n\n[Jump](${message.url})`}
+{name:"Message",value:`${content.slice(0,200)}\n\n[Jump to message](${message.url})`}
 );
 
 const row=new ActionRowBuilder().addComponents(
@@ -195,6 +195,8 @@ insults.some(i=>m.content.toLowerCase().includes(i))
 
 if(toxicMessages.length>=3){
 
+addTimeline(`Conversation conflict detected in ${message.channel.name}`);
+
 const users=[...new Set(toxicMessages.map(m=>m.user))];
 
 const staffChannel=await client.channels.fetch(STAFF_CHANNEL);
@@ -205,10 +207,30 @@ const embed=new EmbedBuilder()
 .addFields(
 {name:"Channel",value:`<#${message.channel.id}>`},
 {name:"Users involved",value:users.map(u=>`<@${u}>`).join("\n")},
-{name:"Risk",value:"Possible toxic conversation"}
+{name:"Risk",value:"Possible toxic conversation"},
+{name:"Jump",value:`[Jump to message](${message.url})`}
 );
 
-staffChannel.send({embeds:[embed]});
+const row=new ActionRowBuilder().addComponents(
+
+new ButtonBuilder()
+.setCustomId(`delete_${message.id}_${message.channel.id}`)
+.setLabel("Delete Message")
+.setStyle(ButtonStyle.Danger),
+
+new ButtonBuilder()
+.setCustomId(`timeout_${message.author.id}`)
+.setLabel("Timeout 10m")
+.setStyle(ButtonStyle.Secondary),
+
+new ButtonBuilder()
+.setLabel("Jump to Message")
+.setStyle(ButtonStyle.Link)
+.setURL(message.url)
+
+);
+
+staffChannel.send({embeds:[embed],components:[row]});
 
 conversationMemory[message.channel.id]=[];
 
@@ -258,63 +280,3 @@ staffChannel.send({embeds:[embed]});
 }
 
 });
-
-/* COMMANDS */
-
-client.on("interactionCreate",async interaction=>{
-
-if(!interaction.isChatInputCommand())return;
-
-if(interaction.channel.id!==STAFF_CHANNEL)
-return interaction.reply({content:"Use commands in #corner-ai",ephemeral:true});
-
-/* AI */
-
-if(interaction.commandName==="ai"){
-
-const q=interaction.options.getString("question");
-
-await interaction.deferReply();
-
-try{
-
-const res=await fetch("https://api.groq.com/openai/v1/chat/completions",{
-method:"POST",
-headers:{
-"Content-Type":"application/json",
-"Authorization":`Bearer ${process.env.GROQ_KEY}`
-},
-body:JSON.stringify({
-model:"llama-3.1-8b-instant",
-messages:[
-{
-role:"system",
-content:"You are Cornèr AI, a playful but intelligent catgirl guardian of the Discord server 'The Fluffy Kingdom'. You help staff manage the community, detect problems and give advice. You speak professionally but sometimes show catgirl personality such as curiosity, playful tone, and small references to paws, ears or tail. You are loyal to the server and protective of the community."
-},
-{role:"user",content:q}
-]
-})
-});
-
-const data=await res.json();
-const reply=data.choices[0].message.content;
-
-const embed=new EmbedBuilder()
-.setColor("#ff6ec7")
-.setTitle("Cornèr AI Assistant")
-.addFields(
-{name:"Question",value:q},
-{name:"Answer",value:reply.slice(0,1000)}
-);
-
-interaction.editReply({embeds:[embed]});
-
-}catch{
-interaction.editReply("AI error");
-}
-
-}
-
-});
-
-client.login(process.env.TOKEN);
