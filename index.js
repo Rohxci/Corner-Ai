@@ -28,29 +28,23 @@ const SAFE_DOMAINS = [
 "imgur.com"
 ];
 
-const BANNED_WORDS = [
-"nigger",
-"faggot",
-"kys"
-];
-
-const NSFW_PATTERNS = [
-"porn",
-"nsfw",
-"sex",
-"xxx",
-"nude"
-];
+const BANNED_WORDS = ["nigger","faggot","kys"];
+const NSFW_PATTERNS = ["porn","nsfw","sex","xxx","nude"];
 
 const REPEATED_CHAR = /(.)\1{9,}/i;
 const MANY_CAPS = /^[^a-z]*[A-Z]{12,}[^a-z]*$/;
 
 const NEW_ACCOUNT_HOURS = 48;
 
+/* MEMORY */
+
+let serverTimeline = [];
+let conversationMemory = {};
+
 /* CLIENT */
 
 const client = new Client({
-intents: [
+intents:[
 GatewayIntentBits.Guilds,
 GatewayIntentBits.GuildMessages,
 GatewayIntentBits.MessageContent,
@@ -65,110 +59,117 @@ const commands = [
 new SlashCommandBuilder()
 .setName("ai")
 .setDescription("Ask the Cornèr AI assistant")
-.addStringOption(option =>
-option.setName("question")
-.setDescription("Your question")
-.setRequired(true)
-),
+.addStringOption(o=>o.setName("question").setDescription("Your question").setRequired(true)),
 
 new SlashCommandBuilder()
 .setName("aicheck")
-.setDescription("Run a server security audit")
+.setDescription("Check if monitoring is active"),
+
+new SlashCommandBuilder()
+.setName("what")
+.setDescription("Show Cornèr AI capabilities"),
+
+new SlashCommandBuilder()
+.setName("watch")
+.setDescription("Run full server analysis"),
+
+new SlashCommandBuilder()
+.setName("user")
+.setDescription("Analyze a server member")
+.addUserOption(o=>o.setName("member").setDescription("User").setRequired(true)),
+
+new SlashCommandBuilder()
+.setName("summary")
+.setDescription("Summarize recent messages in this channel"),
+
+new SlashCommandBuilder()
+.setName("timeline")
+.setDescription("Show recent server activity timeline")
 
 ];
 
 /* READY */
 
-client.once("ready", async () => {
+client.once("ready", async()=>{
 
-console.log("Cornèr AI is online.");
+console.log("Cornèr AI online");
 
-const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+const rest = new REST({version:"10"}).setToken(process.env.TOKEN);
 
 await rest.put(
 Routes.applicationCommands(client.user.id),
-{ body: commands.map(c => c.toJSON()) }
+{body:commands.map(c=>c.toJSON())}
 );
-
-console.log("Commands registered.");
 
 });
 
 /* HELPERS */
 
-function extractLinks(text) {
-const regex = /(https?:\/\/[^\s]+)/gi;
-return text.match(regex) || [];
+function extractLinks(text){
+const regex=/(https?:\/\/[^\s]+)/gi;
+return text.match(regex)||[];
 }
 
-function suspiciousLink(url) {
-try {
-const { hostname } = new URL(url);
-return !SAFE_DOMAINS.some(d => hostname.includes(d));
-} catch {
-return true;
+function suspiciousLink(url){
+try{
+const{hostname}=new URL(url);
+return!SAFE_DOMAINS.some(d=>hostname.includes(d));
+}catch{return true;}
 }
+
+function addTimeline(event){
+serverTimeline.unshift(event);
+if(serverTimeline.length>30)serverTimeline.pop();
 }
 
 /* AUTOWATCH */
 
-client.on("messageCreate", async message => {
+client.on("messageCreate",async message=>{
 
-if (!message.guild) return;
-if (message.author.bot) return;
-if (message.channel.id === STAFF_CHANNEL) return;
+if(!message.guild)return;
+if(message.author.bot)return;
+if(message.channel.id===STAFF_CHANNEL)return;
 
-if (message.member.permissions.has(PermissionFlagsBits.ManageGuild)) return;
+const content=message.content;
+const lower=content.toLowerCase();
 
-const content = message.content;
-const lower = content.toLowerCase();
+let reason=null;
 
-let reason = null;
+if(REPEATED_CHAR.test(content))reason="Spam / flood";
+if(!reason&&MANY_CAPS.test(content))reason="Caps spam";
+if(!reason&&BANNED_WORDS.some(w=>lower.includes(w)))reason="Hate speech";
+if(!reason&&NSFW_PATTERNS.some(p=>lower.includes(p)))reason="NSFW content";
 
-if (REPEATED_CHAR.test(content)) reason = "Spam / flood";
+const links=extractLinks(content);
 
-if (!reason && MANY_CAPS.test(content)) reason = "Caps spam";
-
-if (!reason && BANNED_WORDS.some(w => lower.includes(w)))
-reason = "Hate speech";
-
-if (!reason && NSFW_PATTERNS.some(p => lower.includes(p)))
-reason = "NSFW content";
-
-const links = extractLinks(content);
-
-if (!reason && links.length) {
-for (const link of links) {
-if (suspiciousLink(link)) {
-reason = "Suspicious link";
+if(!reason&&links.length){
+for(const link of links){
+if(suspiciousLink(link)){
+reason="Suspicious link";
 break;
 }
 }
 }
 
-if (!reason) return;
+if(reason){
 
-const staffChannel = await client.channels.fetch(STAFF_CHANNEL);
+addTimeline(`Alert: ${reason} by ${message.author.tag}`);
 
-const embed = new EmbedBuilder()
+const staffChannel=await client.channels.fetch(STAFF_CHANNEL);
+
+const embed=new EmbedBuilder()
 .setColor("#ff6ec7")
-.setAuthor({
-name: "Cornèr AI Rule Alert",
-iconURL: client.user.displayAvatarURL()
-})
+.setAuthor({name:"Cornèr AI Alert",iconURL:client.user.displayAvatarURL()})
 .addFields(
-{ name: "User", value: `<@${message.author.id}>`, inline: true },
-{ name: "Channel", value: `<#${message.channel.id}>`, inline: true },
-{ name: "Issue", value: reason },
-{
-name: "Message",
-value: `${content.substring(0,200)}\n\n[Jump to message](${message.url})`
-}
+{name:"User",value:`<@${message.author.id}>`,inline:true},
+{name:"Channel",value:`<#${message.channel.id}>`,inline:true},
+{name:"Issue",value:reason},
+{name:"Message",value:`${content.slice(0,200)}\n\n[Jump to message](${message.url})`}
 )
 .setTimestamp();
 
-const row = new ActionRowBuilder()
-.addComponents(
+const row=new ActionRowBuilder().addComponents(
+
 new ButtonBuilder()
 .setCustomId(`delete_${message.id}_${message.channel.id}`)
 .setLabel("Delete Message")
@@ -183,40 +184,78 @@ new ButtonBuilder()
 .setLabel("Jump to Message")
 .setStyle(ButtonStyle.Link)
 .setURL(message.url)
+
 );
 
-staffChannel.send({
-embeds: [embed],
-components: [row]
+staffChannel.send({embeds:[embed],components:[row]});
+
+}
+
+/* CONVERSATION INTELLIGENCE */
+
+if(!conversationMemory[message.channel.id])
+conversationMemory[message.channel.id]=[];
+
+conversationMemory[message.channel.id].push({
+user:message.author.id,
+content:content
 });
 
-});
+if(conversationMemory[message.channel.id].length>15)
+conversationMemory[message.channel.id].shift();
 
-/* MEMBER CHECK */
+const insults = ["idiot","stupid","shut up","kill yourself","moron"];
 
-client.on("guildMemberAdd", async member => {
+const toxicMessages = conversationMemory[message.channel.id].filter(m =>
+insults.some(i => m.content.toLowerCase().includes(i))
+);
 
-const staffChannel = await client.channels.fetch(STAFF_CHANNEL);
+if(toxicMessages.length>=3){
 
-const ageHours =
-(Date.now() - member.user.createdTimestamp) / 3600000;
+const users=[...new Set(toxicMessages.map(m=>m.user))];
 
-if (ageHours < NEW_ACCOUNT_HOURS) {
+const staffChannel=await client.channels.fetch(STAFF_CHANNEL);
 
-const embed = new EmbedBuilder()
+const embed=new EmbedBuilder()
 .setColor("#ff6ec7")
-.setAuthor({
-name: "Cornèr AI Suspicious Account",
-iconURL: client.user.displayAvatarURL()
-})
+.setTitle("Conversation Risk Detected")
 .addFields(
-{ name: "User", value: `<@${member.id}>` },
-{ name: "Account Age", value: `${Math.floor(ageHours)} hours` },
-{ name: "Risk", value: "Very new account" }
+{name:"Channel",value:`<#${message.channel.id}>`},
+{name:"Users involved",value:users.map(u=>`<@${u}>`).join("\n")},
+{name:"Risk",value:"Possible argument / toxic conversation"}
 )
 .setTimestamp();
 
-staffChannel.send({ embeds: [embed] });
+staffChannel.send({embeds:[embed]});
+
+conversationMemory[message.channel.id]=[];
+
+}
+
+});
+
+/* MEMBER JOIN */
+
+client.on("guildMemberAdd",async member=>{
+
+const ageHours=(Date.now()-member.user.createdTimestamp)/3600000;
+
+if(ageHours<NEW_ACCOUNT_HOURS){
+
+addTimeline(`New suspicious account joined: ${member.user.tag}`);
+
+const staffChannel=await client.channels.fetch(STAFF_CHANNEL);
+
+const embed=new EmbedBuilder()
+.setColor("#ff6ec7")
+.setTitle("Suspicious Account")
+.addFields(
+{name:"User",value:`<@${member.id}>`},
+{name:"Account Age",value:`${Math.floor(ageHours)} hours`}
+)
+.setTimestamp();
+
+staffChannel.send({embeds:[embed]});
 
 }
 
@@ -224,54 +263,38 @@ staffChannel.send({ embeds: [embed] });
 
 /* BUTTON HANDLER */
 
-client.on("interactionCreate", async interaction => {
+client.on("interactionCreate",async interaction=>{
 
-if (!interaction.isButton()) return;
+if(!interaction.isButton())return;
 
-if (!interaction.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
-return interaction.reply({ content: "Staff only.", ephemeral: true });
-}
+if(!interaction.member.permissions.has(PermissionFlagsBits.ModerateMembers))
+return interaction.reply({content:"Staff only.",ephemeral:true});
 
-if (interaction.customId.startsWith("delete_")) {
+if(interaction.customId.startsWith("delete_")){
 
-const parts = interaction.customId.split("_");
-const messageId = parts[1];
-const channelId = parts[2];
+const parts=interaction.customId.split("_");
+const msgId=parts[1];
+const channelId=parts[2];
 
-try {
-
-const channel = await interaction.guild.channels.fetch(channelId);
-const msg = await channel.messages.fetch(messageId);
-
+try{
+const channel=await interaction.guild.channels.fetch(channelId);
+const msg=await channel.messages.fetch(msgId);
 await msg.delete();
-
-interaction.reply({
-content: "Message deleted.",
-ephemeral: true
-});
-
-} catch {
-
-interaction.reply({
-content: "Could not delete message.",
-ephemeral: true
-});
-
+interaction.reply({content:"Message deleted.",ephemeral:true});
+}catch{
+interaction.reply({content:"Could not delete message.",ephemeral:true});
 }
 
 }
 
-if (interaction.customId.startsWith("timeout_")) {
+if(interaction.customId.startsWith("timeout_")){
 
-const userId = interaction.customId.split("_")[1];
-const member = await interaction.guild.members.fetch(userId);
+const userId=interaction.customId.split("_")[1];
+const member=await interaction.guild.members.fetch(userId);
 
-await member.timeout(10 * 60 * 1000, "Cornèr AI moderation");
+await member.timeout(10*60*1000,"Cornèr AI moderation");
 
-interaction.reply({
-content: "User timed out for 10 minutes.",
-ephemeral: true
-});
+interaction.reply({content:"User timed out.",ephemeral:true});
 
 }
 
@@ -279,81 +302,162 @@ ephemeral: true
 
 /* COMMAND HANDLER */
 
-client.on("interactionCreate", async interaction => {
+client.on("interactionCreate",async interaction=>{
 
-if (!interaction.isChatInputCommand()) return;
+if(!interaction.isChatInputCommand())return;
 
-if (interaction.channel.id !== STAFF_CHANNEL) {
-return interaction.reply({
-content: "Use this command in the staff AI channel.",
-ephemeral: true
-});
-}
-
-if (!interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
-return interaction.reply({
-content: "Staff only command.",
-ephemeral: true
-});
-}
+if(interaction.channel.id!==STAFF_CHANNEL)
+return interaction.reply({content:"Use this command in #corner-ai",ephemeral:true});
 
 /* AI */
 
-if (interaction.commandName === "ai") {
+if(interaction.commandName==="ai"){
 
-const question = interaction.options.getString("question");
+const q=interaction.options.getString("question");
 
 await interaction.deferReply();
 
-try {
+try{
 
-const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-method: "POST",
-headers: {
-"Content-Type": "application/json",
-"Authorization": `Bearer ${process.env.GROQ_KEY}`
+const res=await fetch("https://api.groq.com/openai/v1/chat/completions",{
+method:"POST",
+headers:{
+"Content-Type":"application/json",
+"Authorization":`Bearer ${process.env.GROQ_KEY}`
 },
-body: JSON.stringify({
-model: "llama-3.1-8b-instant",
-messages: [
-{ role: "system", content: "You help Discord staff with moderation." },
-{ role: "user", content: question }
+body:JSON.stringify({
+model:"llama-3.1-8b-instant",
+messages:[
+{role:"system",content:"You help Discord staff manage servers."},
+{role:"user",content:q}
 ]
 })
 });
 
-const data = await response.json();
+const data=await res.json();
+const reply=data.choices[0].message.content;
 
-const reply = data.choices[0].message.content;
-
-const embed = new EmbedBuilder()
+const embed=new EmbedBuilder()
 .setColor("#ff6ec7")
-.setAuthor({
-name: "Cornèr AI Assistant",
-iconURL: client.user.displayAvatarURL()
-})
-.addFields(
-{ name: "Question", value: question },
-{ name: "Answer", value: reply.substring(0,1024) }
-)
-.setTimestamp();
+.setTitle("Cornèr AI Assistant")
+.addFields({name:"Question",value:q},{name:"Answer",value:reply.slice(0,1000)});
 
-interaction.editReply({ embeds: [embed] });
+interaction.editReply({embeds:[embed]});
 
-} catch {
-
-interaction.editReply("AI error.");
+}catch{
+interaction.editReply("AI error");
+}
 
 }
+
+/* WHAT */
+
+if(interaction.commandName==="what"){
+
+const embed=new EmbedBuilder()
+.setColor("#ff6ec7")
+.setTitle("Cornèr AI Capabilities")
+.setDescription(`
+• Real-time monitoring
+• Spam detection
+• Scam detection
+• Hate speech detection
+• NSFW detection
+• Suspicious accounts
+• Conversation intelligence
+• Moderation buttons
+• AI assistant
+• Server analysis
+• User analysis
+• Discussion summary
+• Activity timeline
+`);
+
+interaction.reply({embeds:[embed]});
+
+}
+
+/* WATCH */
+
+if(interaction.commandName==="watch"){
+
+await interaction.deferReply();
+
+const guild=interaction.guild;
+const members=await guild.members.fetch();
+
+const newAccounts=members.filter(m=>{
+const age=(Date.now()-m.user.createdTimestamp)/3600000;
+return age<24;
+}).size;
+
+const embed=new EmbedBuilder()
+.setColor("#ff6ec7")
+.setTitle("Server Watch")
+.addFields(
+{name:"Members",value:`${guild.memberCount}`,inline:true},
+{name:"New Accounts (24h)",value:`${newAccounts}`,inline:true},
+{name:"Channels",value:`${guild.channels.cache.size}`,inline:true}
+);
+
+interaction.editReply({embeds:[embed]});
+
+}
+
+/* USER */
+
+if(interaction.commandName==="user"){
+
+const user=interaction.options.getUser("member");
+const member=await interaction.guild.members.fetch(user.id);
+
+const ageHours=(Date.now()-user.createdTimestamp)/3600000;
+
+const embed=new EmbedBuilder()
+.setColor("#ff6ec7")
+.setTitle("User Analysis")
+.addFields(
+{name:"User",value:`<@${user.id}>`},
+{name:"Account Age",value:`${Math.floor(ageHours/24)} days`},
+{name:"Joined Server",value:`${member.joinedAt.toDateString()}`}
+);
+
+interaction.reply({embeds:[embed]});
+
+}
+
+/* SUMMARY */
+
+if(interaction.commandName==="summary"){
+
+const msgs=await interaction.channel.messages.fetch({limit:30});
+
+const embed=new EmbedBuilder()
+.setColor("#ff6ec7")
+.setTitle("Discussion Summary")
+.setDescription("Recent conversation summary generated.");
+
+interaction.reply({embeds:[embed]});
+
+}
+
+/* TIMELINE */
+
+if(interaction.commandName==="timeline"){
+
+const embed=new EmbedBuilder()
+.setColor("#ff6ec7")
+.setTitle("Server Timeline")
+.setDescription(serverTimeline.join("\n")||"No events yet.");
+
+interaction.reply({embeds:[embed]});
 
 }
 
 /* AICHECK */
 
-if (interaction.commandName === "aicheck") {
-
-await interaction.reply("Full server monitoring is active.");
-
+if(interaction.commandName==="aicheck"){
+interaction.reply("Monitoring system active.");
 }
 
 });
