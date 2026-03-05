@@ -16,9 +16,12 @@ ButtonBuilder,
 ButtonStyle
 } = require("discord.js");
 
-/* CONFIG */
+/* =========================
+CONFIG
+========================= */
 
 const STAFF_CHANNEL = "1478869019783335957";
+
 const NEW_ACCOUNT_HOURS = 48;
 
 const RAID_JOIN_THRESHOLD = 5;
@@ -34,7 +37,9 @@ const SAFE_DOMAINS = [
 "imgur.com"
 ];
 
-/* MEMORY */
+/* =========================
+MEMORY
+========================= */
 
 let serverTimeline = [];
 let conversationMemory = {};
@@ -45,7 +50,9 @@ let userTrust = {};
 
 let violationCount = 0;
 
-/* CLIENT */
+/* =========================
+CLIENT
+========================= */
 
 const client = new Client({
 intents:[
@@ -56,7 +63,9 @@ GatewayIntentBits.GuildMembers
 ]
 });
 
-/* VIOLATION PATTERNS */
+/* =========================
+VIOLATION PATTERNS
+========================= */
 
 const VIOLATIONS = {
 
@@ -68,7 +77,10 @@ spam:[
 /buy now/i,
 /limited offer/i,
 /cheap price/i,
-/earn money fast/i
+/earn money fast/i,
+/click fast/i,
+/instant profit/i,
+/easy money/i
 ],
 
 caps:[
@@ -84,7 +96,8 @@ scam:[
 /steam gift/i,
 /gift card/i,
 /crypto reward/i,
-/airdrop/i
+/airdrop/i,
+/claim reward/i
 ],
 
 phishing:[
@@ -135,7 +148,9 @@ fake_giveaway:[
 
 };
 
-/* COMMANDS */
+/* =========================
+COMMANDS
+========================= */
 
 const commands=[
 
@@ -144,7 +159,7 @@ new SlashCommandBuilder()
 .setDescription("Ask Cornèr AI")
 .addStringOption(o=>o.setName("question").setRequired(true)),
 
-new SlashCommandBuilder().setName("what").setDescription("Show capabilities"),
+new SlashCommandBuilder().setName("what").setDescription("Show bot capabilities"),
 new SlashCommandBuilder().setName("watch").setDescription("Server overview"),
 new SlashCommandBuilder().setName("timeline").setDescription("Server timeline"),
 
@@ -155,28 +170,32 @@ new SlashCommandBuilder()
 
 new SlashCommandBuilder()
 .setName("risk")
-.setDescription("Check user risk")
+.setDescription("Check risk")
 .addUserOption(o=>o.setName("member").setRequired(true)),
 
 new SlashCommandBuilder()
 .setName("trust")
-.setDescription("Check user trust")
+.setDescription("Check trust")
 .addUserOption(o=>o.setName("member").setRequired(true)),
 
 new SlashCommandBuilder().setName("stats").setDescription("Moderation statistics"),
-new SlashCommandBuilder().setName("scan").setDescription("Scan channel"),
+new SlashCommandBuilder().setName("scan").setDescription("Scan current channel"),
+
 new SlashCommandBuilder().setName("lock").setDescription("Lock server"),
 new SlashCommandBuilder().setName("unlock").setDescription("Unlock server"),
+
 new SlashCommandBuilder().setName("slowmode").setDescription("Enable slowmode"),
-new SlashCommandBuilder().setName("aicheck").setDescription("Check AI system")
+new SlashCommandBuilder().setName("aicheck").setDescription("Check monitoring")
 
 ];
 
-/* READY */
+/* =========================
+READY
+========================= */
 
 client.once("ready",async()=>{
 
-console.log("Cornèr AI v5 online");
+console.log("Cornèr AI FULL online");
 
 const rest=new REST({version:"10"}).setToken(process.env.TOKEN);
 
@@ -187,23 +206,41 @@ Routes.applicationCommands(client.user.id),
 
 });
 
-/* HELPERS */
+/* =========================
+HELPERS
+========================= */
 
 function addTimeline(event){
+
 serverTimeline.unshift(event);
-if(serverTimeline.length>80)serverTimeline.pop();
+
+if(serverTimeline.length>100)
+serverTimeline.pop();
+
 }
 
 function extractLinks(text){
+
 const regex=/(https?:\/\/[^\s]+)/gi;
+
 return text.match(regex)||[];
+
 }
 
 function suspiciousLink(url){
+
 try{
+
 const {hostname}=new URL(url);
+
 return !SAFE_DOMAINS.some(d=>hostname.includes(d));
-}catch{return true;}
+
+}catch{
+
+return true;
+
+}
+
 }
 
 function detectViolation(text){
@@ -222,7 +259,9 @@ return null;
 
 }
 
-/* AI ANALYSIS */
+/* =========================
+AI ANALYSIS
+========================= */
 
 async function analyzeMessage(content){
 
@@ -244,7 +283,7 @@ model:"llama-3.1-8b-instant",
 messages:[
 {
 role:"system",
-content:"Classify message: SAFE, SPAM, SCAM, HARASSMENT, NSFW, RAID."
+content:"Classify this message as SAFE, SPAM, SCAM, HARASSMENT, NSFW or RAID."
 },
 {role:"user",content}
 ]
@@ -265,7 +304,9 @@ return "SAFE";
 
 }
 
-/* MESSAGE MONITOR */
+/* =========================
+MESSAGE MONITOR
+========================= */
 
 client.on("messageCreate",async message=>{
 
@@ -277,7 +318,7 @@ const content = message.content;
 
 let reason = detectViolation(content);
 
-/* LINK DETECTION */
+/* LINK CHECK */
 
 const links = extractLinks(content);
 
@@ -319,8 +360,8 @@ const embed = new EmbedBuilder()
 {name:"User",value:`<@${message.author.id}>`,inline:true},
 {name:"Channel",value:`<#${message.channel.id}>`,inline:true},
 {name:"Type",value:aiResult},
-{name:"Risk Score",value:`${userRisk[message.author.id]}`},
-{name:"Trust Score",value:`${userTrust[message.author.id]}`},
+{name:"Risk",value:`${userRisk[message.author.id]}`},
+{name:"Trust",value:`${userTrust[message.author.id]}`},
 {name:"Message",value:`${content.slice(0,200)}\n\n[Jump to message](${message.url})`}
 );
 
@@ -347,19 +388,11 @@ staffChannel.send({embeds:[embed],components:[row]});
 
 }
 
-/* CONVERSATION MEMORY */
-
-if(!conversationMemory[message.channel.id])
-conversationMemory[message.channel.id]=[];
-
-conversationMemory[message.channel.id].push(content);
-
-if(conversationMemory[message.channel.id].length>20)
-conversationMemory[message.channel.id].shift();
-
 });
 
-/* RAID DETECTION */
+/* =========================
+RAID DETECTION
+========================= */
 
 client.on("guildMemberAdd",async member=>{
 
@@ -401,185 +434,3 @@ member.guild.roles.everyone,
 }
 
 });
-
-/* BUTTON HANDLER */
-
-client.on("interactionCreate",async interaction=>{
-
-if(!interaction.isButton()) return;
-
-if(!interaction.member.permissions.has(PermissionFlagsBits.ModerateMembers))
-return interaction.reply({content:"Staff only.",ephemeral:true});
-
-if(interaction.customId.startsWith("delete_")){
-
-const parts=interaction.customId.split("_");
-const msgId=parts[1];
-const channelId=parts[2];
-
-try{
-
-const channel=await interaction.guild.channels.fetch(channelId);
-const msg=await channel.messages.fetch(msgId);
-
-await msg.delete();
-
-interaction.reply({content:"Message deleted.",ephemeral:true});
-
-}catch{
-
-interaction.reply({content:"Delete failed.",ephemeral:true});
-
-}
-
-}
-
-if(interaction.customId.startsWith("timeout_")){
-
-const userId=interaction.customId.split("_")[1];
-const member=await interaction.guild.members.fetch(userId);
-
-await member.timeout(10*60*1000,"Cornèr AI moderation");
-
-interaction.reply({content:"User timed out.",ephemeral:true});
-
-}
-
-});
-
-/* COMMANDS */
-
-client.on("interactionCreate",async interaction=>{
-
-if(!interaction.isChatInputCommand()) return;
-
-if(interaction.channel.id!==STAFF_CHANNEL)
-return interaction.reply({content:"Use commands in staff channel.",ephemeral:true});
-
-/* RISK */
-
-if(interaction.commandName==="risk"){
-
-const user=interaction.options.getUser("member");
-
-const risk=userRisk[user.id]||0;
-
-interaction.reply(`${user.username} risk score: ${risk}`);
-
-}
-
-/* TRUST */
-
-if(interaction.commandName==="trust"){
-
-const user=interaction.options.getUser("member");
-
-const trust=userTrust[user.id]||100;
-
-interaction.reply(`${user.username} trust score: ${trust}`);
-
-}
-
-/* STATS */
-
-if(interaction.commandName==="stats"){
-
-interaction.reply(`Violations detected: ${violationCount}`);
-
-}
-
-/* TIMELINE */
-
-if(interaction.commandName==="timeline"){
-
-const embed=new EmbedBuilder()
-.setColor("#ff6ec7")
-.setTitle("Server Timeline")
-.setDescription(serverTimeline.join("\n")||"No events.");
-
-interaction.reply({embeds:[embed]});
-
-}
-
-/* WATCH */
-
-if(interaction.commandName==="watch"){
-
-const embed=new EmbedBuilder()
-.setColor("#ff6ec7")
-.setTitle("Server Watch")
-.addFields(
-{name:"Members",value:`${interaction.guild.memberCount}`,inline:true},
-{name:"Channels",value:`${interaction.guild.channels.cache.size}`,inline:true},
-{name:"Alerts",value:`${serverTimeline.length}`,inline:true}
-);
-
-interaction.reply({embeds:[embed]});
-
-}
-
-/* LOCK */
-
-if(interaction.commandName==="lock"){
-
-interaction.guild.channels.cache.forEach(async channel=>{
-
-if(channel.isTextBased()){
-
-try{
-await channel.permissionOverwrites.edit(
-interaction.guild.roles.everyone,
-{SendMessages:false}
-);
-}catch{}
-
-}
-
-});
-
-interaction.reply("Server locked.");
-
-}
-
-/* UNLOCK */
-
-if(interaction.commandName==="unlock"){
-
-interaction.guild.channels.cache.forEach(async channel=>{
-
-if(channel.isTextBased()){
-
-try{
-await channel.permissionOverwrites.edit(
-interaction.guild.roles.everyone,
-{SendMessages:true}
-);
-}catch{}
-
-}
-
-});
-
-interaction.reply("Server unlocked.");
-
-}
-
-/* SLOWMODE */
-
-if(interaction.commandName==="slowmode"){
-
-interaction.channel.setRateLimitPerUser(10);
-
-interaction.reply("Slowmode enabled (10s).");
-
-}
-
-/* AICHECK */
-
-if(interaction.commandName==="aicheck"){
-interaction.reply("Cornèr AI monitoring active.");
-}
-
-});
-
-client.login(process.env.TOKEN);
