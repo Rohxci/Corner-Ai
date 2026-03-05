@@ -19,13 +19,7 @@ ButtonStyle
 const STAFF_CHANNEL = "1478869019783335957";
 
 const SAFE_DOMAINS = [
-"discord.com",
-"discord.gg",
-"youtube.com",
-"youtu.be",
-"tenor.com",
-"giphy.com",
-"imgur.com"
+"discord.com","discord.gg","youtube.com","youtu.be","tenor.com","giphy.com","imgur.com"
 ];
 
 const BANNED_WORDS = ["nigger","faggot","kys"];
@@ -40,6 +34,7 @@ const NEW_ACCOUNT_HOURS = 48;
 
 let serverTimeline = [];
 let conversationMemory = {};
+let joinTracker = [];
 
 /* CLIENT */
 
@@ -61,30 +56,17 @@ new SlashCommandBuilder()
 .setDescription("Ask the Cornèr AI assistant")
 .addStringOption(o=>o.setName("question").setDescription("Your question").setRequired(true)),
 
-new SlashCommandBuilder()
-.setName("aicheck")
-.setDescription("Check if monitoring is active"),
-
-new SlashCommandBuilder()
-.setName("what")
-.setDescription("Show Cornèr AI capabilities"),
-
-new SlashCommandBuilder()
-.setName("watch")
-.setDescription("Run full server analysis"),
+new SlashCommandBuilder().setName("aicheck").setDescription("Check monitoring status"),
+new SlashCommandBuilder().setName("what").setDescription("Show Cornèr AI capabilities"),
+new SlashCommandBuilder().setName("watch").setDescription("Run full server analysis"),
 
 new SlashCommandBuilder()
 .setName("user")
 .setDescription("Analyze a server member")
 .addUserOption(o=>o.setName("member").setDescription("User").setRequired(true)),
 
-new SlashCommandBuilder()
-.setName("summary")
-.setDescription("Summarize recent messages in this channel"),
-
-new SlashCommandBuilder()
-.setName("timeline")
-.setDescription("Show recent server activity timeline")
+new SlashCommandBuilder().setName("summary").setDescription("Summarize conversation"),
+new SlashCommandBuilder().setName("timeline").setDescription("Show server timeline")
 
 ];
 
@@ -105,6 +87,11 @@ Routes.applicationCommands(client.user.id),
 
 /* HELPERS */
 
+function addTimeline(event){
+serverTimeline.unshift(event);
+if(serverTimeline.length>30)serverTimeline.pop();
+}
+
 function extractLinks(text){
 const regex=/(https?:\/\/[^\s]+)/gi;
 return text.match(regex)||[];
@@ -112,17 +99,12 @@ return text.match(regex)||[];
 
 function suspiciousLink(url){
 try{
-const{hostname}=new URL(url);
-return!SAFE_DOMAINS.some(d=>hostname.includes(d));
+const {hostname}=new URL(url);
+return !SAFE_DOMAINS.some(d=>hostname.includes(d));
 }catch{return true;}
 }
 
-function addTimeline(event){
-serverTimeline.unshift(event);
-if(serverTimeline.length>30)serverTimeline.pop();
-}
-
-/* AUTOWATCH */
+/* MESSAGE MONITOR */
 
 client.on("messageCreate",async message=>{
 
@@ -151,6 +133,8 @@ break;
 }
 }
 
+/* ALERT */
+
 if(reason){
 
 addTimeline(`Alert: ${reason} by ${message.author.tag}`);
@@ -159,14 +143,13 @@ const staffChannel=await client.channels.fetch(STAFF_CHANNEL);
 
 const embed=new EmbedBuilder()
 .setColor("#ff6ec7")
-.setAuthor({name:"Cornèr AI Alert",iconURL:client.user.displayAvatarURL()})
+.setTitle("Cornèr AI Alert")
 .addFields(
 {name:"User",value:`<@${message.author.id}>`,inline:true},
 {name:"Channel",value:`<#${message.channel.id}>`,inline:true},
 {name:"Issue",value:reason},
-{name:"Message",value:`${content.slice(0,200)}\n\n[Jump to message](${message.url})`}
-)
-.setTimestamp();
+{name:"Message",value:`${content.slice(0,200)}\n\n[Jump](${message.url})`}
+);
 
 const row=new ActionRowBuilder().addComponents(
 
@@ -204,10 +187,10 @@ content:content
 if(conversationMemory[message.channel.id].length>15)
 conversationMemory[message.channel.id].shift();
 
-const insults = ["idiot","stupid","shut up","kill yourself","moron"];
+const insults=["idiot","stupid","shut up","moron","kill yourself"];
 
-const toxicMessages = conversationMemory[message.channel.id].filter(m =>
-insults.some(i => m.content.toLowerCase().includes(i))
+const toxicMessages=conversationMemory[message.channel.id].filter(m =>
+insults.some(i=>m.content.toLowerCase().includes(i))
 );
 
 if(toxicMessages.length>=3){
@@ -222,9 +205,8 @@ const embed=new EmbedBuilder()
 .addFields(
 {name:"Channel",value:`<#${message.channel.id}>`},
 {name:"Users involved",value:users.map(u=>`<@${u}>`).join("\n")},
-{name:"Risk",value:"Possible argument / toxic conversation"}
-)
-.setTimestamp();
+{name:"Risk",value:"Possible toxic conversation"}
+);
 
 staffChannel.send({embeds:[embed]});
 
@@ -238,13 +220,15 @@ conversationMemory[message.channel.id]=[];
 
 client.on("guildMemberAdd",async member=>{
 
+joinTracker.push(Date.now());
+
 const ageHours=(Date.now()-member.user.createdTimestamp)/3600000;
 
-if(ageHours<NEW_ACCOUNT_HOURS){
-
-addTimeline(`New suspicious account joined: ${member.user.tag}`);
-
 const staffChannel=await client.channels.fetch(STAFF_CHANNEL);
+
+/* NEW ACCOUNT */
+
+if(ageHours<NEW_ACCOUNT_HOURS){
 
 const embed=new EmbedBuilder()
 .setColor("#ff6ec7")
@@ -252,8 +236,22 @@ const embed=new EmbedBuilder()
 .addFields(
 {name:"User",value:`<@${member.id}>`},
 {name:"Account Age",value:`${Math.floor(ageHours)} hours`}
-)
-.setTimestamp();
+);
+
+staffChannel.send({embeds:[embed]});
+
+}
+
+/* RAID DETECTION */
+
+joinTracker=joinTracker.filter(t=>Date.now()-t<60000);
+
+if(joinTracker.length>=5){
+
+const embed=new EmbedBuilder()
+.setColor("#ff0000")
+.setTitle("Possible Raid Detected")
+.setDescription("Multiple users joined in a short time.");
 
 staffChannel.send({embeds:[embed]});
 
@@ -277,10 +275,14 @@ const msgId=parts[1];
 const channelId=parts[2];
 
 try{
+
 const channel=await interaction.guild.channels.fetch(channelId);
 const msg=await channel.messages.fetch(msgId);
+
 await msg.delete();
+
 interaction.reply({content:"Message deleted.",ephemeral:true});
+
 }catch{
 interaction.reply({content:"Could not delete message.",ephemeral:true});
 }
@@ -300,14 +302,14 @@ interaction.reply({content:"User timed out.",ephemeral:true});
 
 });
 
-/* COMMAND HANDLER */
+/* COMMANDS */
 
 client.on("interactionCreate",async interaction=>{
 
 if(!interaction.isChatInputCommand())return;
 
 if(interaction.channel.id!==STAFF_CHANNEL)
-return interaction.reply({content:"Use this command in #corner-ai",ephemeral:true});
+return interaction.reply({content:"Use commands in #corner-ai",ephemeral:true});
 
 /* AI */
 
@@ -340,7 +342,10 @@ const reply=data.choices[0].message.content;
 const embed=new EmbedBuilder()
 .setColor("#ff6ec7")
 .setTitle("Cornèr AI Assistant")
-.addFields({name:"Question",value:q},{name:"Answer",value:reply.slice(0,1000)});
+.addFields(
+{name:"Question",value:q},
+{name:"Answer",value:reply.slice(0,1000)}
+);
 
 interaction.editReply({embeds:[embed]});
 
@@ -363,8 +368,9 @@ const embed=new EmbedBuilder()
 • Scam detection
 • Hate speech detection
 • NSFW detection
-• Suspicious accounts
 • Conversation intelligence
+• Suspicious account detection
+• Raid detection
 • Moderation buttons
 • AI assistant
 • Server analysis
@@ -384,19 +390,12 @@ if(interaction.commandName==="watch"){
 await interaction.deferReply();
 
 const guild=interaction.guild;
-const members=await guild.members.fetch();
-
-const newAccounts=members.filter(m=>{
-const age=(Date.now()-m.user.createdTimestamp)/3600000;
-return age<24;
-}).size;
 
 const embed=new EmbedBuilder()
 .setColor("#ff6ec7")
 .setTitle("Server Watch")
 .addFields(
 {name:"Members",value:`${guild.memberCount}`,inline:true},
-{name:"New Accounts (24h)",value:`${newAccounts}`,inline:true},
 {name:"Channels",value:`${guild.channels.cache.size}`,inline:true}
 );
 
@@ -411,15 +410,12 @@ if(interaction.commandName==="user"){
 const user=interaction.options.getUser("member");
 const member=await interaction.guild.members.fetch(user.id);
 
-const ageHours=(Date.now()-user.createdTimestamp)/3600000;
-
 const embed=new EmbedBuilder()
 .setColor("#ff6ec7")
 .setTitle("User Analysis")
 .addFields(
 {name:"User",value:`<@${user.id}>`},
-{name:"Account Age",value:`${Math.floor(ageHours/24)} days`},
-{name:"Joined Server",value:`${member.joinedAt.toDateString()}`}
+{name:"Joined",value:`${member.joinedAt.toDateString()}`}
 );
 
 interaction.reply({embeds:[embed]});
@@ -429,8 +425,6 @@ interaction.reply({embeds:[embed]});
 /* SUMMARY */
 
 if(interaction.commandName==="summary"){
-
-const msgs=await interaction.channel.messages.fetch({limit:30});
 
 const embed=new EmbedBuilder()
 .setColor("#ff6ec7")
